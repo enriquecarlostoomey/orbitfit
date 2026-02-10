@@ -3,7 +3,7 @@
 from orbitfit.orbitfit import OrekitFit, add_maneuver_to_config_dict, inclination_change_get_directions, STK_CONFIG, PRECISE_CONFIG
 from orbitfit.orbitfit import logger as orbitfit_logger
 from orbitfit.rotate import rotate_gps
-from orbitfit.io import download_tfrs_data, parse_gps_data
+from orbitfit.io import parse_gps_data
 from orbitfit.utils import (interp, filter_with_tle, filter_with_mean_oe, get_mean_oe, plot_error_aar,
                             get_gps_error_percentiles)
 from orbitfit.tle_utils import load_tle

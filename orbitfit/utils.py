@@ -46,7 +46,7 @@ def interp(df, new_index):
     x = np.array([t.timestamp() for t in df.index])
     x_interp = np.array([t.timestamp() for t in df_out.index])
 
-    for colname, col in df.iteritems():
+    for colname, col in df.items():
         if np.issubdtype(col.dtype, np.number):
             f = scipy.interpolate.interp1d(x, col.values, kind="cubic", fill_value="extrapolate", assume_sorted=True)
             df_out[colname] = f(x_interp)

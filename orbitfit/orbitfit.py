@@ -93,7 +93,7 @@ def inclination_change_get_directions(df_gps, propulsion_start, total_propulsion
     manoeuvres = []
     start_date = propulsion_start
     df_gps_orbital_changes = df_gps_subset["orbital_momentum_direction"][df_gps_subset["orbital_momentum_direction"].diff(-1) != 0.0]
-    for end_date, value in df_gps_orbital_changes.iteritems():
+    for end_date, value in df_gps_orbital_changes.items():
         if end_date > propulsion_end:
             end_date = propulsion_end
         duration = (end_date - start_date).total_seconds()
