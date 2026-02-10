@@ -2,6 +2,14 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 
+def load_gps_data(gps_filename):
+    """Load GPS data from pickle file.
+    :param gps_filename: Path to pickle file with GPS data
+    :return: DataFrame with GPS data
+    """
+    return pd.read_pickle(gps_filename)
+
+
 def parse_gps_data(df_gps, save=False, plot=False, filter_status=True):
     """loads pickle with tfrs data
     :param df_gps: dataframe with columns ["utc_date", "navigation_state", "ecef_pos_x", "ecef_pos_y", "ecef_pos_z", "ecef_vel_x", "ecef_vel_y", "ecef_vel_z"
@@ -9,7 +17,7 @@ def parse_gps_data(df_gps, save=False, plot=False, filter_status=True):
     :param plot: If True, saves the parsed data into pickle file with name filename_orbit_{source}.pkl
     :param filter_status: If True, all gps values with status != 1 are filtered (status=1 -> lock)
     """
-    df_gps.index = pd.to_datetime(df_gps[f'utc_time'], unit='s')
+    df_gps.index = pd.to_datetime(df_gps['utc_time'], unit='s')
     df_gps.sort_index(inplace=True)
 
     if filter_status:
