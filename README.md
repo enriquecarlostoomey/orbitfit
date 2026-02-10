@@ -53,6 +53,10 @@ install Java so that it doesn't crash when importing orbdetpy.py (not 100% sure 
 
 The main input of `run_Orekit_fit.py` is a `.pkl` with columns: **ecef_pos_x, ecef_pos_y, ecef_pos_z, ecef_vel_x, ecef_vel_y, ecef_vel_z**, and index being datetime objects.
 
+```
+python run_Orekit_fit.py -f pkl_example_1/CH01_20210310_MTQ_Test4_rev6_rows0to1415_gps.pkl -v -s -o output -p --step 10 --loops 10 --filter-mean-oe
+```
+
 ### Optional inputs
 * *--step*: Defines the integration step in seconds. A value of 10 seconds is recommended, though larger values can be 
 use if the time range of the data to be fit is long.
