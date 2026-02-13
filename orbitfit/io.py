@@ -2,14 +2,6 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 
-def load_gps_data(gps_filename):
-    """Load GPS data from pickle file.
-    :param gps_filename: Path to pickle file with GPS data
-    :return: DataFrame with GPS data
-    """
-    return pd.read_pickle(gps_filename)
-
-
 def parse_gps_data(df_gps, save=False, plot=False, filter_status=True):
     """loads pickle with tfrs data
     :param df_gps: dataframe with columns ["utc_date", "navigation_state", "ecef_pos_x", "ecef_pos_y", "ecef_pos_z", "ecef_vel_x", "ecef_vel_y", "ecef_vel_z"
@@ -34,7 +26,7 @@ def parse_gps_data(df_gps, save=False, plot=False, filter_status=True):
         df_gps[['randv_mks_0', 'randv_mks_1', 'randv_mks_2']].plot(ax=ax[0], style='--*',
                                                                                              grid=True)
         ax[0].set_ylabel('pos [m]')
-        df_gps[['randv_mks_0', 'randv_mks_1', 'randv_mks_2']].plot(ax=ax[1], style='--*',
+        df_gps[['randv_mks_3', 'randv_mks_4', 'randv_mks_5']].plot(ax=ax[1], style='--*',
                                                                                              grid=True)
         ax[1].set_ylabel('vel [m/s]')
 
