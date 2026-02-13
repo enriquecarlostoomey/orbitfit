@@ -20,7 +20,6 @@ import pandas as pd
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger()
 
-
 def set_logger(verbose, output_dir):
     level = {0: logging.WARN, 1: logging.INFO, 2: logging.DEBUG}[verbose]
     ch = logging.StreamHandler()
@@ -80,7 +79,8 @@ if __name__ ==  "__main__":
     set_logger(args.verbose, args.output)
 
     logger.info(f"Load gps data from {args.gps_filename}")
-    df_gps = parse_gps_data(args.gps_filename)
+    df_gps = pd.read_pickle(args.gps_filename)
+    df_gps = parse_gps_data(df_gps)
     logger.info(f"GPS data available from {df_gps.index[0]} to {df_gps.index[-1]}")
 
     logger.info(f"Load initial TLE from {args.tle_filename}")
@@ -114,7 +114,7 @@ if __name__ ==  "__main__":
     if args.save:
         fig.savefig(os.path.join(args.output, "initial_error_arr_filtered.png"))
     if args.plot:
-        plt.show()
+        plt.show(block=True)
 
     logger.info(f"Running orbitfit optmization")
     tle_out = optimizer.run_fit(max_loops=args.loops, percentchg=args.percentchg,

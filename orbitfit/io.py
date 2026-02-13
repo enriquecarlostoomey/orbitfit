@@ -9,7 +9,7 @@ def parse_gps_data(df_gps, save=False, plot=False, filter_status=True):
     :param plot: If True, saves the parsed data into pickle file with name filename_orbit_{source}.pkl
     :param filter_status: If True, all gps values with status != 1 are filtered (status=1 -> lock)
     """
-    df_gps.index = pd.to_datetime(df_gps[f'utc_time'], unit='s')
+    df_gps.index = pd.to_datetime(df_gps['utc_time'], unit='s')
     df_gps.sort_index(inplace=True)
 
     if filter_status:
@@ -26,7 +26,7 @@ def parse_gps_data(df_gps, save=False, plot=False, filter_status=True):
         df_gps[['randv_mks_0', 'randv_mks_1', 'randv_mks_2']].plot(ax=ax[0], style='--*',
                                                                                              grid=True)
         ax[0].set_ylabel('pos [m]')
-        df_gps[['randv_mks_0', 'randv_mks_1', 'randv_mks_2']].plot(ax=ax[1], style='--*',
+        df_gps[['randv_mks_3', 'randv_mks_4', 'randv_mks_5']].plot(ax=ax[1], style='--*',
                                                                                              grid=True)
         ax[1].set_ylabel('vel [m/s]')
 
