@@ -222,9 +222,8 @@ class GenericFit:
             df_diff = df_pos_vel - df_out
         else:
             df_diff = df_out - df_pos_vel
-        error_pos_km = df_diff[["randv_mks_{}".format(i) for i in range(3)]].values / 1000
-        error_vel_km_s = df_diff[["randv_mks_{}".format(i) for i in range(3, 6)]].values / 1000
-        return error_pos_km, error_vel_km_s
+        posvel_error_km = df_diff[["randv_mks_{}".format(i) for i in range(6)]].values / 1000
+        return posvel_error_km
 
     def propagate_state(self, state):
         """
@@ -289,7 +288,7 @@ class GenericFit:
             state_mod[i] += deltaamt
             state_mod = self.fix_state(state_mod)
             logger.debug(f"state {i} changed to: {state_mod[i]}")
-            error_pos_km, error_vel_km_s = self.get_state_error(state_mod, df_state)
+            posvel_error_km = self.get_state_error(state_mod, df_state)
 #            if logger.level == logging.DEBUG:
 #                fig, ax = plt.subplots(2, 1)
 #                fig.suptitle(f"Error for state {i} with deltaamt:{deltaamt}")
@@ -298,7 +297,7 @@ class GenericFit:
 #                ax[1].plot(df_pos_vel.index, error_vel_km_s)
 #                ax[1].set_ylabel("Vel error [km/s]")
 #                plt.show()
-            a.append(np.hstack((error_pos_km, error_vel_km_s))/deltaamt)
+            a.append(posvel_error_km/deltaamt)
         return np.asarray(a)
 
     def lsqr_loop(self, state, b, w, loop, deltaamtchg, percentchg, svd=False):
@@ -326,8 +325,8 @@ class GenericFit:
         """
         # <---
         state = self.initial_state
-        error_pos_km, error_vel_km_s = self.get_state_error(state, self.df_gps, inverse=True)
-        b = np.hstack((error_pos_km, error_vel_km_s))
+        posvel_error_km = self.get_state_error(state, self.df_gps, inverse=True)
+        b = posvel_error_km
         w = np.array([1, 1, 1, .01, .01, .01])
         sigmanew = np.mean(b ** 2 * w)
         sigmaold = 20000.0
@@ -347,8 +346,8 @@ class GenericFit:
                 logger.exception(e)
                 logger.warning(f"Something went wrong! returning state from loop {loop}")
                 break
-            error_pos_km, error_vel_km_s = self.get_state_error(new_state, self.df_gps, inverse=True)
-            b = np.hstack((error_pos_km, error_vel_km_s))
+            posvel_error_km = self.get_state_error(new_state, self.df_gps, inverse=True)
+            b = posvel_error_km
             w = np.array([1, 1, 1, 1, 1, 1])
             sigmanew = np.mean(b ** 2 * w)
             state = copy.copy(new_state)
