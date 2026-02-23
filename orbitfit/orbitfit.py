@@ -127,6 +127,47 @@ def add_maneuver_to_config_dict(config_dict, propulsion_date, propulsion_time, d
         config_dict["Maneuvers"] = [maneuver_config]
     return config_dict
 
+def fix_state(state, statetype="e"):
+    """Checks that the state describes a posible orbit"""
+    if statetype == "e":
+        # En el codigo de vallado, el "a" esta definido a partir de no, y no de no_kozai
+        a = state[2]
+        if a < 1.0:
+            state[2] = a = 1.01 #Equivalent to 60km alt
+            logger.warning("a can be less than 1.0, changes to 1.01")
+        no_min = 1e-5 #missing units for this
+        tumin = np.sqrt(R_mean_earth**3/mu_earth) / 60.0
+        a_no_min = (no_min*tumin)**(-2.0 / 3.0)
+        if a > a_no_min:
+            state[2] = a = 0.99*a_no_min  # Equivalent to 60km alt
+            logger.warning("due to minimum no of 1e-5, a can be less than {}. Changin a to {}".format(a_no_min, a))
+        inclo = 2 * np.arctan(np.sqrt(state[4] ** 2 + state[5] ** 2))
+        nodeo = np.arctan2(state[4], state[5])
+        if nodeo < 0.0:
+            nodeo += 2*np.pi
+            state[4] = (np.tan(inclo * 0.5) * np.sin(nodeo))
+            state[5] = (np.tan(inclo * 0.5) * np.cos(nodeo))
+        argpo = np.arctan2(state[1], state[0]) - nodeo
+        ecco = np.sqrt(state[0] ** 2 + state[1] ** 2)
+        if ecco > 1.0:
+            ecco = 0.9
+            state[0] = (ecco * np.cos(argpo + nodeo))
+            state[1] = (ecco * np.sin(argpo + nodeo))
+    return state
+
+def filter_dstate(d_state, state, loop):
+    d_state_filtered = copy.copy(d_state)
+    for i in range(len(d_state)):
+        if loop > -1 and abs(d_state[i]/state[i]) > 1000:
+            d_state_filtered[i] = 0.1 * state[i] * np.sign(d_state[i])
+        elif loop > 0 and abs(d_state[i]/state[i]) > 200:
+            d_state_filtered[i] = 0.3 * state[i] * np.sign(d_state[i])
+        elif loop > 0 and abs(d_state[i]/state[i]) > 100:
+            d_state_filtered[i] = 0.7 * state[i] * np.sign(d_state[i])
+        elif loop > 0 and abs(d_state[i]/state[i]) > 10:
+            d_state_filtered[i] = 0.9 * state[i] * np.sign(d_state[i])
+    return d_state_filtered
+
 
 # This are the two functions that need to change depending on TLE propagator or OREKIT
 
@@ -147,47 +188,6 @@ class GenericFit:
         """
         pass
 
-    def fix_state(self, state, statetype="e"):
-        """Checks that the state describes a posible orbit"""
-        if statetype == "e":
-            # En el codigo de vallado, el "a" esta definido a partir de no, y no de no_kozai
-            a = state[2]
-            if a < 1.0:
-                state[2] = a = 1.01 #Equivalent to 60km alt
-                logger.warning("a can be less than 1.0, changes to 1.01")
-            no_min = 1e-5 #missing units for this
-            tumin = np.sqrt(R_mean_earth**3/mu_earth) / 60.0
-            a_no_min = (no_min*tumin)**(-2.0 / 3.0)
-            if a > a_no_min:
-                state[2] = a = 0.99*a_no_min  # Equivalent to 60km alt
-                logger.warning("due to minimum no of 1e-5, a can be less than {}. Changin a to {}".format(a_no_min, a))
-            inclo = 2 * np.arctan(np.sqrt(state[4] ** 2 + state[5] ** 2))
-            nodeo = np.arctan2(state[4], state[5])
-            if nodeo < 0.0:
-                nodeo += 2*np.pi
-                state[4] = (np.tan(inclo * 0.5) * np.sin(nodeo))
-                state[5] = (np.tan(inclo * 0.5) * np.cos(nodeo))
-            argpo = np.arctan2(state[1], state[0]) - nodeo
-            ecco = np.sqrt(state[0] ** 2 + state[1] ** 2)
-            if ecco > 1.0:
-                ecco = 0.9
-                state[0] = (ecco * np.cos(argpo + nodeo))
-                state[1] = (ecco * np.sin(argpo + nodeo))
-        return state
-
-    def filter_dstate(self, d_state, state, loop):
-        d_state_filtered = copy.copy(d_state)
-        for i in range(len(d_state)):
-            if loop > -1 and abs(d_state[i]/state[i]) > 1000:
-                d_state_filtered[i] = 0.1 * state[i] * np.sign(d_state[i])
-            elif loop > 0 and abs(d_state[i]/state[i]) > 200:
-                d_state_filtered[i] = 0.3 * state[i] * np.sign(d_state[i])
-            elif loop > 0 and abs(d_state[i]/state[i]) > 100:
-                d_state_filtered[i] = 0.7 * state[i] * np.sign(d_state[i])
-            elif loop > 0 and abs(d_state[i]/state[i]) > 10:
-                d_state_filtered[i] = 0.9 * state[i] * np.sign(d_state[i])
-        return d_state_filtered
-
     def find_a(self, state, deltaamtchg=1e-6, percentchg=0.001):
         a = []
         df_state = self.propagate_state(state)
@@ -202,7 +202,7 @@ class GenericFit:
                 deltaamt = state_mod[i] * percentchg_local
             logger.debug(f"Calculating a for state {i}: {state[i]} with deltaamt: {deltaamt}")
             state_mod[i] += deltaamt
-            state_mod = self.fix_state(state_mod)
+            state_mod = fix_state(state_mod)
             logger.debug(f"state {i} changed to: {state_mod[i]}")
             posvel_error_km = self.get_state_error(state_mod, df_state)
 #            if logger.level == logging.DEBUG:
@@ -224,9 +224,9 @@ class GenericFit:
 
         inv_awat = np.linalg.inv(awat)
         d_state = np.dot(inv_awat, abw)
-        d_state_filtered = self.filter_dstate(d_state, state, loop)
+        d_state_filtered = filter_dstate(d_state, state, loop)
         new_state = [x + dx for x, dx in zip(state, d_state_filtered)]
-        new_state = self.fix_state(new_state)
+        new_state = fix_state(new_state)
         return new_state
 
     def _run_fit(self, max_loops=5, percentchg=0.01, deltaamtchg=1e-6, epsilon=1e-8):
