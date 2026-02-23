@@ -11,11 +11,10 @@ import matplotlib.pyplot as plt
 from sgp4.earth_gravity import wgs84
 from sgp4.propagation import sgp4, sgp4init
 
-from quaternions import Quaternion
 from orbdetpy.propagation import propagate_orbits
 import orbdetpy
 from orbdetpy.conversion import get_J2000_epoch_offset, get_UTC_string
-from .utils import interp
+from .utils import interp, rv2oe, oe2rv, ee2oe, oe2ee
 from .astronomical_constants import R_mean_earth, mu_earth
 
 import logging
@@ -132,89 +131,6 @@ def add_maneuver_to_config_dict(config_dict, propulsion_date, propulsion_time, d
 # This are the two functions that need to change depending on TLE propagator or OREKIT
 
 class GenericFit:
-
-    def rv2oe(self, r, v, threshold=1e-7):
-        """
-        Computes Orbital Elements from cartesian coordinates.
-        Input position and velocity are in ECI (inertial reference frame) in [km] and [km/s].
-        All output angles are in radians. a in [km]
-        returns: a, ecco, inclo, nodeo, argpo, mo
-        """
-        rnorm = np.linalg.norm(r)
-        vnorm = np.linalg.norm(v)
-        a = -mu_earth / (2 * (vnorm ** 2 / 2 - mu_earth / rnorm))
-        h = np.cross(r, v)
-        h_norm = np.linalg.norm(h)
-
-        e_vec = 1 / mu_earth * np.cross(v, h) - r / rnorm
-        ecco = np.linalg.norm(e_vec)
-        inclo = np.arccos(h[2] / h_norm)
-        if abs(inclo % (2 * np.pi)) > threshold:
-            line_of_nodes = np.cross(np.array([0, 0, 1]), h)
-            nodeo = np.arctan2(line_of_nodes[1], line_of_nodes[0])
-            nodeo = nodeo % (2 * np.pi)
-            if ecco > threshold:
-                cos_w = np.dot(line_of_nodes, e_vec) / (ecco * np.linalg.norm(line_of_nodes))
-                if e_vec[2] >= 0:
-                    argpo = np.arccos(cos_w)
-                else:
-                    argpo = 2 * np.pi - np.arccos(cos_w)
-                argpo = argpo % (2 * np.pi)
-                sigma0 = np.dot(r, v) / np.sqrt(mu_earth)
-                E0 = np.arctan2(sigma0 / np.sqrt(a), 1 - rnorm / a)
-                mo = E0 - ecco * np.sin(E0)
-            else:
-                argpo = 0
-                sigma0 = np.dot(r, v) / np.sqrt(mu_earth)
-                mo = np.arctan2(sigma0 / np.sqrt(a), 1 - rnorm / a)
-        else:
-            nodeo = np.NaN
-            argpo = np.NaN
-            if ecco > threshold:
-                sigma0 = np.dot(r, v) / np.sqrt(mu_earth)
-                E0 = np.arctan2(sigma0 / np.sqrt(a), 1 - rnorm / a)
-                mo = E0 - ecco * np.sin(E0)
-        return a, ecco, inclo, nodeo, argpo, mo
-
-    def oe2rv(self, a, ecco, inclo, nodeo, argpo, mo):
-        p = a * (1 - ecco ** 2)
-        f = lambda E: mo - (E - ecco * np.sin(E))
-        E0 = scipy.optimize.newton(f, x0=mo, rtol=1e-9)
-        no = 2 * np.arctan(np.sqrt((1 + ecco) / (1 - ecco)) * np.tan(E0 / 2))
-        temp = p / (1 + ecco * np.cos(no))
-        rpqw = np.array([temp * np.cos(no),
-                         temp * np.sin(no),
-                         0.0])
-        vpwq = np.array([-np.sin(no) * np.sqrt(mu_earth / p),
-                         (ecco + np.cos(no)) * np.sqrt(mu_earth / p),
-                         0.0])
-        q_argpo = Quaternion.from_rotation_vector(np.array([0.0, 0.0, -argpo]))
-        q_inclo = Quaternion.from_rotation_vector(np.array([-inclo, 0.0, 0.0]))
-        q_nodeo = Quaternion.from_rotation_vector(np.array([0.0, 0.0, -nodeo]))
-        q_total = q_nodeo * q_inclo * q_argpo
-        r = q_total * rpqw
-        v = q_total * vpwq
-        return r, v
-
-    def oe2ee(self, a, ecco, inclo, nodeo, argpo, mo):
-        af = ecco * np.cos(argpo + nodeo)
-        ag = ecco * np.sin(argpo + nodeo)
-        a = a / R_mean_earth
-        L = np.mod(mo + argpo + nodeo, 2 * np.pi)
-        pe = np.tan(0.5 * inclo) * np.sin(nodeo)
-        qe = np.tan(0.5 * inclo) * np.cos(nodeo)
-        return af, ag, a, L, pe, qe
-
-    def ee2oe(self, af, ag, a, L, pe, qe):
-        a = a * R_mean_earth
-        ecco = np.sqrt(af ** 2 + ag ** 2)
-        # que hacer si ecco > 1.0
-        inclo = 2 * np.arctan(np.sqrt(pe ** 2 + qe ** 2))
-        nodeo = np.arctan2(pe, qe)
-        # que hacer si nodeo < 0.0
-        argpo = np.arctan2(ag, af) - nodeo
-        mo = np.mod(L - nodeo - argpo, 2 * np.pi)
-        return a, ecco, inclo, nodeo, argpo, mo
 
     def get_state_error(self, state, df_pos_vel, inverse=False):
         df_out = self.propagate_state(state)
@@ -399,8 +315,8 @@ class OrekitFit(GenericFit):
     def state2config(self, state):
         """Uses baseconfig, bug"""
         config = copy.deepcopy(self.baseconfig)
-        oe = self.ee2oe(*state[:6])
-        r, v = self.oe2rv(*oe)
+        oe = ee2oe(*state[:6])
+        r, v = oe2rv(*oe)
         config["Propagation"]["InitialState"] = (1000 * r).tolist() + (1000 * v).tolist()
         if self.optimize_area:
             config["SpaceObject"]["Area"] = state[6]
@@ -422,8 +338,8 @@ class OrekitFit(GenericFit):
         rv = config["Propagation"]["InitialState"]
         r = np.array(rv[0:3]) / 1000
         v = np.array(rv[3:6]) / 1000
-        oe = self.rv2oe(r, v)
-        ee = self.oe2ee(*oe)
+        oe = rv2oe(r, v)
+        ee = oe2ee(*oe)
         state = list(ee)
         if self.optimize_area:
             area = config["SpaceObject"]["Area"]
