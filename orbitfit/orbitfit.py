@@ -264,7 +264,6 @@ class GenericFit:
                 break
             posvel_error_km = self.get_state_error(new_state, self.df_gps, inverse=True)
             b = posvel_error_km
-            w = np.array([1, 1, 1, 1, 1, 1])
             sigmanew = np.mean(b ** 2 * w)
             state = copy.copy(new_state)
             logger.info("{}: {}".format(loop, sigmanew))
