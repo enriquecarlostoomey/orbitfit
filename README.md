@@ -117,7 +117,7 @@ as the TLE epoch.
 The repository comes with two examples available:
 
 ```
-python run_TLE_fit.py TLE_example_1/NSL1_GPS_Test_20210309_gps.pkl TLE_example_1/example_tle.txt -v -s -o TLE_example_1 -p 
+python run_TLE_fit.py TLE_example_1/NSL1_GPS_Test_20210309_gps.pkl TLE_example_1/example_tle.txt -v -s -p 
 
 2021-07-27 16:59:46,649 - INFO - Creating output file TLE_example_1
 2021-07-27 16:59:46,668 - INFO - Load gps data from TLE_example_1/NSL1_GPS_Test_20210309.pkl
@@ -153,7 +153,7 @@ INFO:root:a: 6952.353 [km], T: 94.15976211 [s], ecco: 0.00201358, inclo: 97.7774
 ![TLE Error after fit](doc/TLE_error_aar_filtered.png)
 
 ```
-python run_TLE_fit.py TLE_example_2/CH01_20210716_GPS_Test4_Rev6-3_rows_0to686_fixed.pkl TLE_example_2/real_tle.txt -v -s -o TLE_example_2 -p --statesize 7
+python run_TLE_fit.py TLE_example_2/CH01_20210716_GPS_Test4_Rev6-3_rows_0to686_fixed_gps.pkl TLE_example_2/real_tle.txt -v -s -p --statesize 7
 
 2022-04-11 15:31:12,301 - INFO - Creating output file TLE_example_2
 2022-04-11 15:31:12,301 - INFO - Load gps data from TLE_example_2/CH01_20210716_GPS_Test4_Rev6-3_rows_0to686_fixed_gps.pkl
