@@ -11,11 +11,10 @@ import matplotlib.pyplot as plt
 from sgp4.earth_gravity import wgs84
 from sgp4.propagation import sgp4, sgp4init
 
-from quaternions import Quaternion
 from orbdetpy.propagation import propagate_orbits
 import orbdetpy
 from orbdetpy.conversion import get_J2000_epoch_offset, get_UTC_string
-from .utils import interp
+from .utils import interp, rv2oe, oe2rv, ee2oe, oe2ee
 from .astronomical_constants import R_mean_earth, mu_earth
 
 import logging
@@ -128,93 +127,51 @@ def add_maneuver_to_config_dict(config_dict, propulsion_date, propulsion_time, d
         config_dict["Maneuvers"] = [maneuver_config]
     return config_dict
 
+def fix_state(state, statetype="e"):
+    """Checks that the state describes a posible orbit"""
+    if statetype == "e":
+        # En el codigo de vallado, el "a" esta definido a partir de no, y no de no_kozai
+        a = state[2]
+        if a < 1.0:
+            state[2] = a = 1.01 #Equivalent to 60km alt
+            logger.warning("a can be less than 1.0, changes to 1.01")
+        no_min = 1e-5 #missing units for this
+        tumin = np.sqrt(R_mean_earth**3/mu_earth) / 60.0
+        a_no_min = (no_min*tumin)**(-2.0 / 3.0)
+        if a > a_no_min:
+            state[2] = a = 0.99*a_no_min  # Equivalent to 60km alt
+            logger.warning("due to minimum no of 1e-5, a can be less than {}. Changin a to {}".format(a_no_min, a))
+        inclo = 2 * np.arctan(np.sqrt(state[4] ** 2 + state[5] ** 2))
+        nodeo = np.arctan2(state[4], state[5])
+        if nodeo < 0.0:
+            nodeo += 2*np.pi
+            state[4] = (np.tan(inclo * 0.5) * np.sin(nodeo))
+            state[5] = (np.tan(inclo * 0.5) * np.cos(nodeo))
+        argpo = np.arctan2(state[1], state[0]) - nodeo
+        ecco = np.sqrt(state[0] ** 2 + state[1] ** 2)
+        if ecco > 1.0:
+            ecco = 0.9
+            state[0] = (ecco * np.cos(argpo + nodeo))
+            state[1] = (ecco * np.sin(argpo + nodeo))
+    return state
+
+def filter_dstate(d_state, state, loop):
+    d_state_filtered = copy.copy(d_state)
+    for i in range(len(d_state)):
+        if loop > -1 and abs(d_state[i]/state[i]) > 1000:
+            d_state_filtered[i] = 0.1 * state[i] * np.sign(d_state[i])
+        elif loop > 0 and abs(d_state[i]/state[i]) > 200:
+            d_state_filtered[i] = 0.3 * state[i] * np.sign(d_state[i])
+        elif loop > 0 and abs(d_state[i]/state[i]) > 100:
+            d_state_filtered[i] = 0.7 * state[i] * np.sign(d_state[i])
+        elif loop > 0 and abs(d_state[i]/state[i]) > 10:
+            d_state_filtered[i] = 0.9 * state[i] * np.sign(d_state[i])
+    return d_state_filtered
+
 
 # This are the two functions that need to change depending on TLE propagator or OREKIT
 
 class GenericFit:
-
-    def rv2oe(self, r, v, threshold=1e-7):
-        """
-        Computes Orbital Elements from cartesian coordinates.
-        Input position and velocity are in ECI (inertial reference frame) in [km] and [km/s].
-        All output angles are in radians. a in [km]
-        returns: a, ecco, inclo, nodeo, argpo, mo
-        """
-        rnorm = np.linalg.norm(r)
-        vnorm = np.linalg.norm(v)
-        a = -mu_earth / (2 * (vnorm ** 2 / 2 - mu_earth / rnorm))
-        h = np.cross(r, v)
-        h_norm = np.linalg.norm(h)
-
-        e_vec = 1 / mu_earth * np.cross(v, h) - r / rnorm
-        ecco = np.linalg.norm(e_vec)
-        inclo = np.arccos(h[2] / h_norm)
-        if abs(inclo % (2 * np.pi)) > threshold:
-            line_of_nodes = np.cross(np.array([0, 0, 1]), h)
-            nodeo = np.arctan2(line_of_nodes[1], line_of_nodes[0])
-            nodeo = nodeo % (2 * np.pi)
-            if ecco > threshold:
-                cos_w = np.dot(line_of_nodes, e_vec) / (ecco * np.linalg.norm(line_of_nodes))
-                if e_vec[2] >= 0:
-                    argpo = np.arccos(cos_w)
-                else:
-                    argpo = 2 * np.pi - np.arccos(cos_w)
-                argpo = argpo % (2 * np.pi)
-                sigma0 = np.dot(r, v) / np.sqrt(mu_earth)
-                E0 = np.arctan2(sigma0 / np.sqrt(a), 1 - rnorm / a)
-                mo = E0 - ecco * np.sin(E0)
-            else:
-                argpo = 0
-                sigma0 = np.dot(r, v) / np.sqrt(mu_earth)
-                mo = np.arctan2(sigma0 / np.sqrt(a), 1 - rnorm / a)
-        else:
-            nodeo = np.NaN
-            argpo = np.NaN
-            if ecco > threshold:
-                sigma0 = np.dot(r, v) / np.sqrt(mu_earth)
-                E0 = np.arctan2(sigma0 / np.sqrt(a), 1 - rnorm / a)
-                mo = E0 - ecco * np.sin(E0)
-        return a, ecco, inclo, nodeo, argpo, mo
-
-    def oe2rv(self, a, ecco, inclo, nodeo, argpo, mo):
-        p = a * (1 - ecco ** 2)
-        f = lambda E: mo - (E - ecco * np.sin(E))
-        E0 = scipy.optimize.newton(f, x0=mo, rtol=1e-9)
-        no = 2 * np.arctan(np.sqrt((1 + ecco) / (1 - ecco)) * np.tan(E0 / 2))
-        temp = p / (1 + ecco * np.cos(no))
-        rpqw = np.array([temp * np.cos(no),
-                         temp * np.sin(no),
-                         0.0])
-        vpwq = np.array([-np.sin(no) * np.sqrt(mu_earth / p),
-                         (ecco + np.cos(no)) * np.sqrt(mu_earth / p),
-                         0.0])
-        q_argpo = Quaternion.from_rotation_vector(np.array([0.0, 0.0, -argpo]))
-        q_inclo = Quaternion.from_rotation_vector(np.array([-inclo, 0.0, 0.0]))
-        q_nodeo = Quaternion.from_rotation_vector(np.array([0.0, 0.0, -nodeo]))
-        q_total = q_nodeo * q_inclo * q_argpo
-        r = q_total * rpqw
-        v = q_total * vpwq
-        return r, v
-
-    def oe2ee(self, a, ecco, inclo, nodeo, argpo, mo):
-        af = ecco * np.cos(argpo + nodeo)
-        ag = ecco * np.sin(argpo + nodeo)
-        a = a / R_mean_earth
-        L = np.mod(mo + argpo + nodeo, 2 * np.pi)
-        pe = np.tan(0.5 * inclo) * np.sin(nodeo)
-        qe = np.tan(0.5 * inclo) * np.cos(nodeo)
-        return af, ag, a, L, pe, qe
-
-    def ee2oe(self, af, ag, a, L, pe, qe):
-        a = a * R_mean_earth
-        ecco = np.sqrt(af ** 2 + ag ** 2)
-        # que hacer si ecco > 1.0
-        inclo = 2 * np.arctan(np.sqrt(pe ** 2 + qe ** 2))
-        nodeo = np.arctan2(pe, qe)
-        # que hacer si nodeo < 0.0
-        argpo = np.arctan2(ag, af) - nodeo
-        mo = np.mod(L - nodeo - argpo, 2 * np.pi)
-        return a, ecco, inclo, nodeo, argpo, mo
 
     def get_state_error(self, state, df_pos_vel, inverse=False):
         df_out = self.propagate_state(state)
@@ -222,56 +179,14 @@ class GenericFit:
             df_diff = df_pos_vel - df_out
         else:
             df_diff = df_out - df_pos_vel
-        error_pos_km = df_diff[["randv_mks_{}".format(i) for i in range(3)]].values / 1000
-        error_vel_km_s = df_diff[["randv_mks_{}".format(i) for i in range(3, 6)]].values / 1000
-        return error_pos_km, error_vel_km_s
+        posvel_error_km = df_diff[["randv_mks_{}".format(i) for i in range(6)]].values / 1000
+        return posvel_error_km
 
     def propagate_state(self, state):
         """
         This functions depends on the propagator type, and the format of the measurements.
         """
         pass
-
-    def fix_state(self, state, statetype="e"):
-        """Checks that the state describes a posible orbit"""
-        if statetype == "e":
-            # En el codigo de vallado, el "a" esta definido a partir de no, y no de no_kozai
-            a = state[2]
-            if a < 1.0:
-                state[2] = a = 1.01 #Equivalent to 60km alt
-                logger.warning("a can be less than 1.0, changes to 1.01")
-            no_min = 1e-5 #missing units for this
-            tumin = np.sqrt(R_mean_earth**3/mu_earth) / 60.0
-            a_no_min = (no_min*tumin)**(-2.0 / 3.0)
-            if a > a_no_min:
-                state[2] = a = 0.99*a_no_min  # Equivalent to 60km alt
-                logger.warning("due to minimum no of 1e-5, a can be less than {}. Changin a to {}".format(a_no_min, a))
-            inclo = 2 * np.arctan(np.sqrt(state[4] ** 2 + state[5] ** 2))
-            nodeo = np.arctan2(state[4], state[5])
-            if nodeo < 0.0:
-                nodeo += 2*np.pi
-                state[4] = (np.tan(inclo * 0.5) * np.sin(nodeo))
-                state[5] = (np.tan(inclo * 0.5) * np.cos(nodeo))
-            argpo = np.arctan2(state[1], state[0]) - nodeo
-            ecco = np.sqrt(state[0] ** 2 + state[1] ** 2)
-            if ecco > 1.0:
-                ecco = 0.9
-                state[0] = (ecco * np.cos(argpo + nodeo))
-                state[1] = (ecco * np.sin(argpo + nodeo))
-        return state
-
-    def filter_dstate(self, d_state, state, loop):
-        d_state_filtered = copy.copy(d_state)
-        for i in range(len(d_state)):
-            if loop > -1 and abs(d_state[i]/state[i]) > 1000:
-                d_state_filtered[i] = 0.1 * state[i] * np.sign(d_state[i])
-            elif loop > 0 and abs(d_state[i]/state[i]) > 200:
-                d_state_filtered[i] = 0.3 * state[i] * np.sign(d_state[i])
-            elif loop > 0 and abs(d_state[i]/state[i]) > 100:
-                d_state_filtered[i] = 0.7 * state[i] * np.sign(d_state[i])
-            elif loop > 0 and abs(d_state[i]/state[i]) > 10:
-                d_state_filtered[i] = 0.9 * state[i] * np.sign(d_state[i])
-        return d_state_filtered
 
     def find_a(self, state, deltaamtchg=1e-6, percentchg=0.001):
         a = []
@@ -287,9 +202,9 @@ class GenericFit:
                 deltaamt = state_mod[i] * percentchg_local
             logger.debug(f"Calculating a for state {i}: {state[i]} with deltaamt: {deltaamt}")
             state_mod[i] += deltaamt
-            state_mod = self.fix_state(state_mod)
+            state_mod = fix_state(state_mod)
             logger.debug(f"state {i} changed to: {state_mod[i]}")
-            error_pos_km, error_vel_km_s = self.get_state_error(state_mod, df_state)
+            posvel_error_km = self.get_state_error(state_mod, df_state)
 #            if logger.level == logging.DEBUG:
 #                fig, ax = plt.subplots(2, 1)
 #                fig.suptitle(f"Error for state {i} with deltaamt:{deltaamt}")
@@ -298,7 +213,7 @@ class GenericFit:
 #                ax[1].plot(df_pos_vel.index, error_vel_km_s)
 #                ax[1].set_ylabel("Vel error [km/s]")
 #                plt.show()
-            a.append(np.hstack((error_pos_km, error_vel_km_s))/deltaamt)
+            a.append(posvel_error_km/deltaamt)
         return np.asarray(a)
 
     def lsqr_loop(self, state, b, w, loop, deltaamtchg, percentchg, svd=False):
@@ -309,9 +224,9 @@ class GenericFit:
 
         inv_awat = np.linalg.inv(awat)
         d_state = np.dot(inv_awat, abw)
-        d_state_filtered = self.filter_dstate(d_state, state, loop)
+        d_state_filtered = filter_dstate(d_state, state, loop)
         new_state = [x + dx for x, dx in zip(state, d_state_filtered)]
-        new_state = self.fix_state(new_state)
+        new_state = fix_state(new_state)
         return new_state
 
     def _run_fit(self, max_loops=5, percentchg=0.01, deltaamtchg=1e-6, epsilon=1e-8):
@@ -326,8 +241,8 @@ class GenericFit:
         """
         # <---
         state = self.initial_state
-        error_pos_km, error_vel_km_s = self.get_state_error(state, self.df_gps, inverse=True)
-        b = np.hstack((error_pos_km, error_vel_km_s))
+        posvel_error_km = self.get_state_error(state, self.df_gps, inverse=True)
+        b = posvel_error_km
         w = np.array([1, 1, 1, .01, .01, .01])
         sigmanew = np.mean(b ** 2 * w)
         sigmaold = 20000.0
@@ -347,9 +262,8 @@ class GenericFit:
                 logger.exception(e)
                 logger.warning(f"Something went wrong! returning state from loop {loop}")
                 break
-            error_pos_km, error_vel_km_s = self.get_state_error(new_state, self.df_gps, inverse=True)
-            b = np.hstack((error_pos_km, error_vel_km_s))
-            w = np.array([1, 1, 1, 1, 1, 1])
+            posvel_error_km = self.get_state_error(new_state, self.df_gps, inverse=True)
+            b = posvel_error_km
             sigmanew = np.mean(b ** 2 * w)
             state = copy.copy(new_state)
             logger.info("{}: {}".format(loop, sigmanew))
@@ -400,8 +314,8 @@ class OrekitFit(GenericFit):
     def state2config(self, state):
         """Uses baseconfig, bug"""
         config = copy.deepcopy(self.baseconfig)
-        oe = self.ee2oe(*state[:6])
-        r, v = self.oe2rv(*oe)
+        oe = ee2oe(*state[:6])
+        r, v = oe2rv(*oe)
         config["Propagation"]["InitialState"] = (1000 * r).tolist() + (1000 * v).tolist()
         if self.optimize_area:
             config["SpaceObject"]["Area"] = state[6]
@@ -423,8 +337,8 @@ class OrekitFit(GenericFit):
         rv = config["Propagation"]["InitialState"]
         r = np.array(rv[0:3]) / 1000
         v = np.array(rv[3:6]) / 1000
-        oe = self.rv2oe(r, v)
-        ee = self.oe2ee(*oe)
+        oe = rv2oe(r, v)
+        ee = oe2ee(*oe)
         state = list(ee)
         if self.optimize_area:
             area = config["SpaceObject"]["Area"]
