@@ -48,8 +48,8 @@ def rv2oe(r, v, threshold=1e-7):
             sigma0 = np.dot(r, v) / np.sqrt(mu_earth)
             mo = np.arctan2(sigma0 / np.sqrt(a), 1 - rnorm / a)
     else:
-        nodeo = np.NaN
-        argpo = np.NaN
+        nodeo = np.nan
+        argpo = np.nan
         if ecco > threshold:
             sigma0 = np.dot(r, v) / np.sqrt(mu_earth)
             E0 = np.arctan2(sigma0 / np.sqrt(a), 1 - rnorm / a)
