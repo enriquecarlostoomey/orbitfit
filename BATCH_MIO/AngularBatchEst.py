@@ -7,17 +7,6 @@ import grpc
 
 class Optimizer:
         # Function to initialize and launch the LS Loop optimization
-        #
-        # input:
-        #       df_client,
-        #       df_servicer: dataset of size (N,6) contaioning r,v points in [m,m/s], in ECI frame
-        #       versor_arr_meas: dataset of size (N,3) containing measured relative directions, ECI frame 
-        #       ee_initialguess:
-        #       config: propagator configurations
-        #       config_0: full configuration from JSON file
-        #
-        # Output:
-
 
     def __init__(self, ee_initialguess, df_client, df_servicer, versor_arr_meas, config, config_0=None, 
                  damping_lambda=0.001, max_loops=30, epsilon=1e-12, w_i=None, deltaamtchg=1e-7, percentchg=1e-6):
