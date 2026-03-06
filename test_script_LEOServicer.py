@@ -181,7 +181,7 @@ execution_time = end_wall - start_wall
 print()
 print(f"Start time: {start_wall:.2f} ")
 print(f"End time: {end_wall:.2f} ")
-print(f"Total processing time: {execution_time:.2f} seconds")
+print(f"Total processing time: {execution_time:.2f} [hh:mm:ss]")
 print()
 #
 #

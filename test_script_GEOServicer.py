@@ -22,11 +22,15 @@ mu_earth = 398600.4418  # Earth's gravitational parameter in km^3/s^2
 #                                                                                   #
 #####################################################################################
 
-# Define parameters:
+
+
+# DEFINE PARAMETERS FOR THE SIMULATION:
 
 propstep = 30       # time step for propagation [s]
-duration = 1/24     # days of propagation
+duration = 1     # propagation time [h]
 MaxLoop = 30        # Max Loop in LS algorithm
+noise_std_dev_pos = 1000  # Standard deviation of the client position noise (in m) for the measured versors computation
+noise_std_dev_vel = 100    # Standard deviation of the client velocity noise (in m/s) for the measured versors computation
 
 # position and velocity of the servicer in ECI frame (in meters and m/s)
 posvel_client_ECI_m = np.array([-2528776.634917358, -637910.2273496351, -6454161.018921344, 5660.809351470285, 4262.999013701585, -2623.9097735226724])
@@ -47,7 +51,7 @@ propagation_config = dict()
 propagation_config["InitialState"] = posvel_servicer_ECI_m.tolist()
 propagation_config["Step"] = propstep
 propagation_config['Start'] = epoch.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-propagation_config['End'] = (epoch+datetime.timedelta(days= duration)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+propagation_config['End'] = (epoch+datetime.timedelta(hours= duration)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 servicer_config["Propagation"] = propagation_config
 
 client_config = copy.deepcopy(orb.STK_CONFIG)
@@ -55,7 +59,7 @@ propagation_config = dict()
 propagation_config["InitialState"] = posvel_client_ECI_m.tolist()
 propagation_config["Step"] = propstep
 propagation_config['Start'] = epoch.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-propagation_config['End'] = (epoch+datetime.timedelta(days= duration)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+propagation_config['End'] = (epoch+datetime.timedelta(hours= duration)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 client_config["Propagation"] = propagation_config
 
 # Propagation
@@ -89,8 +93,7 @@ n_measurements = len(df_relative_ECI_real)
 # Columns 0-2 are position; columns 3-5 are velocity components
 
 df_client_ECI_perturbed = df_client_ECI_m.copy()
-noise_std_dev_pos = 0.1  # Standard deviation of the noise in km
-noise_std_dev_vel = 0.01  # Standard deviation of the noise in km/s
+
 # add position noise
 df_client_ECI_perturbed.iloc[:, :3] += np.random.normal(
     0, noise_std_dev_pos, (n_measurements, 3))
@@ -153,7 +156,7 @@ propagation_config = dict()
 propagation_config["InitialState"] = rv_initial_guess.tolist()
 propagation_config["Step"] = propstep
 propagation_config['Start'] = epoch.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-propagation_config['End'] = (epoch+datetime.timedelta(days=duration)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+propagation_config['End'] = (epoch+datetime.timedelta(hours=duration)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 client_config["Propagation"] = propagation_config
 
 # Propagation for initial guess
@@ -183,7 +186,7 @@ execution_time = end_wall - start_wall
 print()
 print(f"Start time: {start_wall} ")
 print(f"End time: {end_wall} ")
-print(f"Total processing time: {execution_time} seconds")
+print(f"Total processing time: {execution_time} [hh:mm:ss]")
 print()
 
 
