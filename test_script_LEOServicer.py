@@ -191,14 +191,63 @@ print()
     #            Plot results              #
     #                                      #
     ########################################
-#
-# Propagating results
 
-# prop_config_final = copy.deepcopy(orb.STK_CONFIG)
-# prop_config_final["Propagation"] = propagation_config
-# index_mod, data_mod = orb.propagate_orbits_wrapper(prop_config_loop)
-# data_mod = np.array([list(item) for item in data_mod])
-# df_state_final = pd.DataFrame(data_mod, index=index_mod, columns=['randv_mks_0', 'randv_mks_1', 'randv_mks_2', 'randv_mks_3', 'randv_mks_4', 'randv_mks_5'])
+
+# ==============================================================================
+# ---      FINAL RESULTS ON RESIDUALS (RELATIVE DIRECTION)                   ---
+# ==============================================================================
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+# 1. Calcolo dei residui rispetto al REALE
+# opt.versor_arr_comp contiene l'array finale salvato dalla classe Optimizer
+res_meas = np.linalg.norm(versor_arr_real - versor_arr_meas, axis=1)
+res_comp = np.linalg.norm(versor_arr_real - opt.versor_arr_comp, axis=1)
+
+# Numero totale di misurazioni per l'asse X
+n_meas = len(versor_arr_meas)
+
+fig = plt.figure(figsize=(14, 10))
+
+# --- SUBPLOT 1: Real vs Measured (3D, Top-Left) ---
+ax1 = fig.add_subplot(221, projection='3d')
+ax1.scatter(versor_arr_real[:, 0], versor_arr_real[:, 1], versor_arr_real[:, 2], 
+            color='green', s=10, label='Real (Truth)')
+ax1.scatter(versor_arr_meas[:, 0], versor_arr_meas[:, 1], versor_arr_meas[:, 2], 
+            color='red', s=10, alpha=0.5, label='Measured (Noisy)')
+ax1.set_title('Real vs Measured Versors')
+ax1.legend()
+
+# --- SUBPLOT 2: Real vs Final Computed (3D, Top-Right) ---
+ax2 = fig.add_subplot(222, projection='3d')
+ax2.scatter(versor_arr_real[:, 0], versor_arr_real[:, 1], versor_arr_real[:, 2], 
+            color='green', s=10, label='Real (Truth)')
+ax2.scatter(opt.versor_arr_comp[:, 0], opt.versor_arr_comp[:, 1], opt.versor_arr_comp[:, 2], 
+            color='blue', s=10, alpha=0.5, label='Final Computed')
+ax2.set_title('Real vs Final Computed Versors')
+ax2.legend()
+
+# --- SUBPLOT 3: Confronto Residui (2D, Bottom span) ---
+# Il layout 212 dice: griglia 2x1, posizione 2 (riga in basso intera)
+ax3 = fig.add_subplot(212)
+ax3.plot(range(n_meas), res_meas, marker='o', linestyle='-', color='red', alpha=0.6, markersize=4, label='|Real - Measured| (Initial Noise)')
+ax3.plot(range(n_meas), res_comp, marker='s', linestyle='-', color='blue', alpha=0.8, markersize=4, label='|Real - Computed| (Final Fit Error)')
+
+ax3.set_xlabel('Measurement Index')
+ax3.set_ylabel('Residual Magnitude')
+ax3.set_title('Versor Residuals Comparison')
+ax3.grid(True, linestyle='--', alpha=0.7)
+ax3.legend()
+
+plt.tight_layout()
+plt.show()
+
+
+
+# ==============================================================================
+# ---       FINAL RESULTS ON THE ORBIT (ABSOLUTE POSITION)                   ---
+# ==============================================================================
 
 # 3D plot of original client orbit df_client_ECI_m and the perturbated initial guess df_client_ECI_fit:
 

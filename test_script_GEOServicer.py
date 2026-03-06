@@ -1,9 +1,8 @@
 import orbitfit.orbitfit as orb
 from orbitfit.utils import (oe2ee, oe2rv, ee2oe, rv2oe)
-
-import orbitfit.utils as utils
 import dateutil.parser
 import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
 import datetime
 import copy
 import pandas as pd
@@ -23,12 +22,15 @@ mu_earth = 398600.4418  # Earth's gravitational parameter in km^3/s^2
 #                                                                                   #
 #####################################################################################
 
-# Define initial state and epoch:
+# Define parameters:
+
+propstep = 30       # time step for propagation [s]
+duration = 1/24     # days of propagation
+MaxLoop = 30        # Max Loop in LS algorithm
 
 # position and velocity of the servicer in ECI frame (in meters and m/s)
 posvel_client_ECI_m = np.array([-2528776.634917358, -637910.2273496351, -6454161.018921344, 5660.809351470285, 4262.999013701585, -2623.9097735226724])
 epoch = dateutil.parser.parse("2021-03-09T16:08:14.991000Z")
-duration = 0.5   # days of propagation
 oe_client_ECI = np.array(rv2oe(posvel_client_ECI_m[0:3]*1e-3, posvel_client_ECI_m[3:6]*1e-3))
 
 
@@ -43,7 +45,7 @@ posvel_servicer_ECI_m = np.concatenate([pos, vel]) * 1e3                        
 servicer_config = copy.deepcopy(orb.STK_CONFIG)
 propagation_config = dict()
 propagation_config["InitialState"] = posvel_servicer_ECI_m.tolist()
-propagation_config["Step"] = 120
+propagation_config["Step"] = propstep
 propagation_config['Start'] = epoch.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 propagation_config['End'] = (epoch+datetime.timedelta(days= duration)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 servicer_config["Propagation"] = propagation_config
@@ -51,7 +53,7 @@ servicer_config["Propagation"] = propagation_config
 client_config = copy.deepcopy(orb.STK_CONFIG)
 propagation_config = dict()
 propagation_config["InitialState"] = posvel_client_ECI_m.tolist()
-propagation_config["Step"] = 120
+propagation_config["Step"] = propstep
 propagation_config['Start'] = epoch.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 propagation_config['End'] = (epoch+datetime.timedelta(days= duration)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 client_config["Propagation"] = propagation_config
@@ -119,12 +121,12 @@ versor_arr_meas = df_relative_ECI_measured.iloc[:, :3].values / df_relative_ECI_
 
 # initial guess: perturbed original initial OE for the client in ECI frame (same as nominal, but with small perturbations)
 oe_initial_guess = oe_client_ECI.copy()
-#oe_initial_guess[0] += np.random.normal(0, 1e-1)  # Add noise to semi-major axis                    [km]
-oe_initial_guess[1] += np.random.normal(0, 1e-3)  # Add noise to eccentricity                       [-]
-oe_initial_guess[2] += np.random.normal(0, 1)     # Add noise to inclination                        [deg]
-oe_initial_guess[3] += np.random.normal(0, 1)     # Add noise to argument of periapsis              [deg]
-oe_initial_guess[4] += np.random.normal(0, 1)     # Add noise to right ascension of ascending node  [deg]
-oe_initial_guess[5] += np.random.normal(0, 1e-1)  # Add noise to true anomaly                       [deg]
+oe_initial_guess[0] += np.random.normal(0, 1)       # Add noise to semi-major axis                    [km]
+oe_initial_guess[1] += np.random.normal(0, 1e-2)    # Add noise to eccentricity                       [-]
+oe_initial_guess[2] += np.random.normal(0, 0.1)     # Add noise to inclination                        [rad]
+oe_initial_guess[3] += np.random.normal(0, 0.1)     # Add noise to argument of periapsis              [rad]
+oe_initial_guess[4] += np.random.normal(0, 0.1)     # Add noise to right ascension of ascending node  [rad]
+oe_initial_guess[5] += np.random.normal(0, 0.01)    # Add noise to true anomaly                       [rad]
 
 pos, vel = oe2rv(*oe_initial_guess)
 rv_initial_guess = np.concatenate((pos, vel))*1e3
@@ -149,7 +151,7 @@ start_wall = datetime.datetime.now()  # Record computer time at start
 client_config = copy.deepcopy(orb.STK_CONFIG)
 propagation_config = dict()
 propagation_config["InitialState"] = rv_initial_guess.tolist()
-propagation_config["Step"] = 120
+propagation_config["Step"] = propstep
 propagation_config['Start'] = epoch.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 propagation_config['End'] = (epoch+datetime.timedelta(days=duration)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 client_config["Propagation"] = propagation_config
@@ -168,7 +170,7 @@ estimator = ang.Optimizer(
     config=propagation_config,             # Solo il dizionario della propagazione (Step, Start, End)
     config_0=client_config,                # L'intero dizionario STK_CONFIG completo
     damping_lambda=0.001,                  # (Opzionale) Valore iniziale per Levenberg-Marquardt
-    max_loops=20                           # (Opzionale) Numero massimo di iterazioni
+    max_loops=MaxLoop                      # (Opzionale) Numero massimo di iterazioni
 )
 
 ##Call to Batch estimator
@@ -193,13 +195,81 @@ print()
 #    #                                      #
 #    ########################################
 
-# Propagating results
 
-# prop_config_final = copy.deepcopy(orb.STK_CONFIG)
-# prop_config_final["Propagation"] = propagation_config
-# index_mod, data_mod = orb.propagate_orbits_wrapper(prop_config_loop)
-# data_mod = np.array([list(item) for item in data_mod])
-# df_state_final = pd.DataFrame(data_mod, index=index_mod, columns=['randv_mks_0', 'randv_mks_1', 'randv_mks_2', 'randv_mks_3', 'randv_mks_4', 'randv_mks_5'])
+# ==============================================================================
+# ---      FINAL RESULTS ON RESIDUALS (RELATIVE DIRECTION)                   ---
+# ==============================================================================
+
+# 1. Calculate residuals (magnitude of the error relative to the truth)
+# NOTE: Make sure the object name matches your instance (e.g., 'opt' or 'estimator')
+res_meas = np.linalg.norm(versor_arr_real - versor_arr_meas, axis=1)
+res_comp = np.linalg.norm(versor_arr_real - estimator.versor_arr_comp, axis=1) 
+
+n_meas = len(versor_arr_meas)
+time_steps = range(n_meas)
+
+# Create figure with GridSpec for layout management
+fig = plt.figure(figsize=(18, 10))
+gs = gridspec.GridSpec(2, 3, height_ratios=[1.2, 1]) # Top row slightly taller
+
+# --- ROW 1: Evolution of individual components X, Y, Z ---
+# Each subplot compares Real, Measured, and Computed for a single axis
+
+# 1. X Component (Index 0)
+ax1 = fig.add_subplot(gs[0, 0])
+ax1.plot(time_steps, versor_arr_real[:, 0], label='Real (Truth)', color='green', linewidth=2)
+ax1.plot(time_steps, versor_arr_meas[:, 0], label='Measured (Noisy)', color='red', alpha=0.5)
+ax1.plot(time_steps, estimator.versor_arr_comp[:, 0], label='Final Computed', color='blue', linestyle='--', linewidth=2)
+ax1.set_title('X Component Evolution')
+ax1.set_xlabel('Measurement Index')
+ax1.set_ylabel('Versor X Value')
+ax1.grid(True, linestyle='--', alpha=0.6)
+ax1.legend()
+
+# 2. Y Component (Index 1)
+# Sharing the Y-axis with ax1 for easier visual comparison
+ax2 = fig.add_subplot(gs[0, 1], sharey=ax1) 
+ax2.plot(time_steps, versor_arr_real[:, 1], label='Real (Truth)', color='green', linewidth=2)
+ax2.plot(time_steps, versor_arr_meas[:, 1], label='Measured (Noisy)', color='red', alpha=0.5)
+ax2.plot(time_steps, estimator.versor_arr_comp[:, 1], label='Final Computed', color='blue', linestyle='--', linewidth=2)
+ax2.set_title('Y Component Evolution')
+ax2.set_xlabel('Measurement Index')
+ax2.grid(True, linestyle='--', alpha=0.6)
+ax2.legend()
+
+# 3. Z Component (Index 2)
+ax3 = fig.add_subplot(gs[0, 2], sharey=ax1)
+ax3.plot(time_steps, versor_arr_real[:, 2], label='Real (Truth)', color='green', linewidth=2)
+ax3.plot(time_steps, versor_arr_meas[:, 2], label='Measured (Noisy)', color='red', alpha=0.5)
+ax3.plot(time_steps, estimator.versor_arr_comp[:, 2], label='Final Computed', color='blue', linestyle='--', linewidth=2)
+ax3.set_title('Z Component Evolution')
+ax3.set_xlabel('Measurement Index')
+ax3.grid(True, linestyle='--', alpha=0.6)
+ax3.legend()
+
+
+# --- ROW 2: Residuals Comparison (Absolute Error) ---
+# Spans across all 3 columns (gs[1, :])
+ax_res = fig.add_subplot(gs[1, :])
+
+ax_res.plot(time_steps, res_meas, marker='o', linestyle='-', color='red', alpha=0.5, markersize=4, label='|Real - Measured| (Initial Noise)')
+ax_res.plot(time_steps, res_comp, marker='s', linestyle='-', color='blue', alpha=0.8, markersize=4, label='|Real - Computed| (Final Fit Error)')
+
+ax_res.set_xlabel('Measurement Index')
+ax_res.set_ylabel('Residual Magnitude')
+ax_res.set_title('Versor Residuals Comparison: Initial Noise vs Final Fit')
+ax_res.grid(True, linestyle='--', alpha=0.7)
+ax_res.legend()
+
+plt.tight_layout()
+plt.show()
+
+
+
+# ==============================================================================
+# ---       FINAL RESULTS ON THE ORBIT (ABSOLUTE POSITION)                   ---
+# ==============================================================================
+
 
 # 3D plot of original client orbit df_client_ECI_m and the perturbated initial guess df_client_ECI_fit:
 
