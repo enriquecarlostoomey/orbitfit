@@ -258,7 +258,7 @@ class Optimizer:
         return df_state_trial, ee_step, versor_arr_comp, b
          
 
-    def lsqr (self, b_init, w, W, versor_arr_init):                                                   # HOW TO CHANGE THE CALL FOR EPSILON?
+    def lsqr (self, b_init, W, versor_arr_init):                                                   # HOW TO CHANGE THE CALL FOR EPSILON?
         """
         Runs the main iterative Batch Least Squares loop. It checks for convergence 
         based on the relative variation of the cost function (epsilon). In each iteration, 
@@ -324,7 +324,7 @@ class Optimizer:
             df_step, ee_step, versor_arr_comp, b = self.LevenbergMarquardt(b, abw, awat, ee_step, max_diag, loop)
 
             # Update sigmanew for the control in "while..."
-            sigmanew = np.mean(b ** 2 * w)
+            sigmanew = np.mean(b ** 2 * self.w_i)
 
             loop += 1
             # Compute error on versors
@@ -363,6 +363,6 @@ class Optimizer:
         W = np.tile(self.w_i, (self.n_measurements,1))       # shape (N, 3)
     
         # Call the loop
-        df_optimized, ee_final, loop = self.lsqr (b, w_i, W, versor_arr_init)
+        df_optimized, ee_final, loop = self.lsqr (b, W, versor_arr_init)
 
         return df_optimized, ee_final, loop
