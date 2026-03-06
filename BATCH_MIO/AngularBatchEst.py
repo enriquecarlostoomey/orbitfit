@@ -287,7 +287,7 @@ class Optimizer:
         versor_arr_comp = versor_arr_init
         b = b_init
         loop = 1
-        sigmanew = np.mean(b ** 2 * w)
+        sigmanew = np.mean(b ** 2 * self.w_i)
         sigmaold = 20000.0
         sigmaold2 = 30000.0
         ee_step = self.ee_initial

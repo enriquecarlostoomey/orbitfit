@@ -162,14 +162,13 @@ df_client_ECI_fit= pd.DataFrame(data=np.array(data), index=pd.DatetimeIndex(inde
 
 # Initialize the class
 
+print("\nInitializing Optimizer...\n")
 estimator = ang.Optimizer(
     ee_initialguess=ee_initial_guess,      # Array degli elementi equinoziali (6,)
     df_client=df_client_ECI_fit,           # DataFrame (N,6) della prima propagazione guess
     df_servicer=df_servicer_ECI_m,         # DataFrame (N,6) della posizione del servicer (reale)
     versor_arr_meas=versor_arr_meas,       # Array (N,3) dei versori misurati (osservazioni)
     config=propagation_config,             # Solo il dizionario della propagazione (Step, Start, End)
-    config_0=client_config,                # L'intero dizionario STK_CONFIG completo
-    damping_lambda=0.001,                  # (Opzionale) Valore iniziale per Levenberg-Marquardt
     max_loops=MaxLoop                      # (Opzionale) Numero massimo di iterazioni
 )
 
