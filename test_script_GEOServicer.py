@@ -27,10 +27,11 @@ mu_earth = 398600.4418  # Earth's gravitational parameter in km^3/s^2
 # DEFINE PARAMETERS FOR THE SIMULATION:
 
 propstep = 30       # time step for propagation [s]
-duration = 1     # propagation time [h]
+duration = 2     # propagation time [h]
 MaxLoop = 30        # Max Loop in LS algorithm
-noise_std_dev_pos = 1000  # Standard deviation of the client position noise (in m) for the measured versors computation
-noise_std_dev_vel = 100    # Standard deviation of the client velocity noise (in m/s) for the measured versors computation
+noise_std_dev_pos = 100  # Standard deviation of the client position noise (in m) for the measured versors computation
+noise_std_dev_vel = 10    # Standard deviation of the client velocity noise (in m/s) for the measured versors computation
+Epsilon = 1e-14           # condition to exit the LS loop
 
 # position and velocity of the servicer in ECI frame (in meters and m/s)
 posvel_client_ECI_m = np.array([-2528776.634917358, -637910.2273496351, -6454161.018921344, 5660.809351470285, 4262.999013701585, -2623.9097735226724])
@@ -172,7 +173,8 @@ estimator = ang.Optimizer(
     df_servicer=df_servicer_ECI_m,         # DataFrame (N,6) della posizione del servicer (reale)
     versor_arr_meas=versor_arr_meas,       # Array (N,3) dei versori misurati (osservazioni)
     config=propagation_config,             # Solo il dizionario della propagazione (Step, Start, End)
-    max_loops=MaxLoop                      # (Opzionale) Numero massimo di iterazioni
+    max_loops=MaxLoop,                      # (Opzionale) Numero massimo di iterazioni
+    epsilon=Epsilon
 )
 
 ##Call to Batch estimator
@@ -203,7 +205,6 @@ print()
 # ==============================================================================
 
 # 1. Calculate residuals (magnitude of the error relative to the truth)
-# NOTE: Make sure the object name matches your instance (e.g., 'opt' or 'estimator')
 res_meas = np.linalg.norm(versor_arr_real - versor_arr_meas, axis=1)
 res_comp = np.linalg.norm(versor_arr_real - estimator.versor_arr_comp, axis=1) 
 
@@ -318,30 +319,6 @@ ax.set_xlabel("X (km)")
 ax.set_ylabel("Y (km)")
 ax.set_zlabel("Z (km)")
 ax.set_title("Original vs Final Fitted Orbit")
-ax.legend()
-plt.show()
-
-# 3D plot of perturbated initial guess df_client_ECI_fit and final interpolated:
-
-fig = plt.figure(figsize=(12, 10))
-ax = fig.add_subplot(111, projection='3d')
-
-# Plot initial guess (perturbed) orbit
-ax.scatter(df_client_ECI_fit["randv_mks_0"],
-           df_client_ECI_fit["randv_mks_1"],
-           df_client_ECI_fit["randv_mks_2"],
-           label="Initial Guess (Perturbed)", color="blue", s=5)
-
-# Plot final fitted orbit
-ax.scatter(df_state_final["randv_mks_0"],
-           df_state_final["randv_mks_1"],
-           df_state_final["randv_mks_2"],
-           label="Final Fitted Orbit", color="green", s=5)
-
-ax.set_xlabel("X (km)")
-ax.set_ylabel("Y (km)")
-ax.set_zlabel("Z (km)")
-ax.set_title("Initial Guess vs Final Fitted Orbit")
 ax.legend()
 plt.show()
 

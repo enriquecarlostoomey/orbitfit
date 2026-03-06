@@ -9,7 +9,7 @@ class Optimizer:
         # Function to initialize and launch the LS Loop optimization
 
     def __init__(self, ee_initialguess, df_client, df_servicer, versor_arr_meas, config, config_0=None, 
-                 damping_lambda=0.001, max_loops=30, epsilon=1e-12, w_i=None, deltaamtchg=1e-7, percentchg=1e-6):
+                 damping_lambda=0.001, max_loops=30, epsilon=1e-10, w_i=None, deltaamtchg=1e-7, percentchg=1e-6):
         """
         Initializes the Optimizer class with the initial state guess, reference datasets, 
         measurements, propagation configurations, and Levenberg-Marquardt solver parameters.
@@ -24,7 +24,7 @@ class Optimizer:
             --damping_lambda (float): Initial damping parameter for the Levenberg-Marquardt algorithm.
             --max_loops (int): Maximum number of iterations allowed before forcing termination.
             --versor_arr_real (ndarray): Real/True relative directions (versors) in ECI frame (N, 3), used for final evaluation and plotting.
-            --epsilon (float, optional): Relative tolerance threshold for the Levenberg-Marquardt convergence check (default 1e-12).
+            --epsilon (float, optional): Relative tolerance threshold for the Levenberg-Marquardt convergence check (default 1e-10).
             --w_i (vector[]): Weight vector for the 3 spatial components. Defaults to [1.0, 1.0, 1.0].
             --deltaamtchg (float, optional): Minimum absolute perturbation step for the Jacobian finite differences (default 1e-7).
             --percentchg (float, optional): Relative perturbation percentage for the Jacobian finite differences (default 1e-6).            
@@ -129,7 +129,7 @@ class Optimizer:
         return np.asarray(a) 
     
 
-    def LevenbergMarquardt (self, b, abw, awat, ee_step, max_diag, loop):
+    def LevenbergMarquardt (self, b, abw, awat, ee_step, max_diag, loop, df_step_old, versor_arr_comp_old):
         """
         Executes the inner loop of the Levenberg-Marquardt algorithm. Applies a scaled damping 
         factor to the normal equations and solves for the state correction step (dx). 
@@ -144,7 +144,9 @@ class Optimizer:
             awat (ndarray): The left-hand side of the normal equations (A' * W * A) (6x6).
             ee_step (list/array): Current accepted equinoctial elements (1x6).
             max_diag (float): Maximum value on the diagonal of awat, used to scale the damping.
-            loop (int): Current iteration index (used for filtering rules).            
+            loop (int): Current iteration index (used for filtering rules).
+            df_state_old: Propagated state from previous step, used if the optimization step fails (N, 6).
+            versor_arr_comp_old: Computed versors corresponding to df_state_old (same rationale) (N, 3).            
         Output:
             df_state_trial: New accepted propagated state of the client (N, 6).
             ee_step: Updated and accepted equinoctial elements (6,).
@@ -213,7 +215,7 @@ class Optimizer:
                 # INTEGRATOR CRASHED: The trial state is physically impossible.
                 # Treat this exactly as if the cost went to infinity.
                 print("   [!] INTEGRATOR CRASH: Trial state is non-physical. Rejecting step.")
-                cost_trial =1e12 # Force the "STEP REJECTED" branch below
+                cost_trial = 2*cost_old # Force the "STEP REJECTED" branch below
                 df_state_trial = None # Just to have a placeholder
 
 
@@ -251,7 +253,11 @@ class Optimizer:
                 # If damping gets unreasonably high, we are stuck in a local minimum
                 if self.damping_lambda >= 1e9:
                     print("   -> WARNING: Damping limit reached. Stopping optimization.")
+                    print("\nForcing the exit from the minimization loop ( step(t)=step(t-1) ).\n")
+                    print("We're probably stucked in a local minimum.")                    
                     step_accepted = True # Force exit to prevent infinite loop
+                    df_state_trial = df_step_old
+                    versor_arr_comp = versor_arr_comp_old
                 else: 
                     print(f"Damping paramter increased to {self.damping_lambda:.6f}.")
             
@@ -321,7 +327,7 @@ class Optimizer:
             # CALL Levenberg-Marquardt logic function
             max_diag = np.max(np.diag(awat))
             
-            df_step, ee_step, versor_arr_comp, b = self.LevenbergMarquardt(b, abw, awat, ee_step, max_diag, loop)
+            df_step, ee_step, versor_arr_comp, b = self.LevenbergMarquardt(b, abw, awat, ee_step, max_diag, loop, df_step, versor_arr_comp)
 
             # Update sigmanew for the control in "while..."
             sigmanew = np.mean(b ** 2 * self.w_i)
