@@ -3,13 +3,16 @@ from orbitfit.utils import (rv2oe, oe2rv, oe2ee, ee2oe)
 import copy
 import pandas as pd
 import numpy as np
-import grpc
+# for sun direction:
+from astropy.time import Time
+from astropy.coordinates import get_sun
+from math import cos, pi
 
 class Optimizer:
         # Function to initialize and launch the LS Loop optimization
 
     def __init__(self, ee_initialguess, df_client, df_servicer, versor_arr_meas, config, config_0=None, 
-                 damping_lambda=0.001, max_loops=30, epsilon=1e-10, w_i=None, deltaamtchg=1e-7, percentchg=1e-6):
+                 damping_lambda=0.001, max_loops=30, epsilon=1e-9, w_i=None, deltaamtchg=1e-7, percentchg=1e-6):
         """
         Initializes the Optimizer class with the initial state guess, reference datasets, 
         measurements, propagation configurations, and Levenberg-Marquardt solver parameters.
@@ -69,6 +72,57 @@ class Optimizer:
         diff = df_client_current.iloc[:, :3].values - self.df_servicer.iloc[:, :3].values
         ranges = np.linalg.norm(diff, axis=1)[:, np.newaxis] # Shape (N, 1)
         return diff / ranges # Shape (N, 3)
+    
+    def FOV_factor(self):
+        pass
+
+    def Sun_visibilityFactor(self, alphaMax=pi/2):
+        """
+        Find the angle between sun-servicer-client to exclude non-visibility situations (backlight)
+        The direction between sun and servicer is been assumed to be the same of sun-earth
+
+        Input:
+            alphaMax: Max angle to gvuarantee target visibility (offset 90 deg)
+        Output:
+        """
+        # time vector
+        times = Time(self.df_servicer.index)
+
+        #sun-earth position
+        sun_coords = get_sun(times)
+        sun_x = sun_coords.cartesian.x.to_value('m')
+        sun_y = sun_coords.cartesian.y.to_value('m')
+        sun_z = sun_coords.cartesian.z.to_value('m')
+        sun_arr = np.column_stack((-sun_x, -sun_y, -sun_z))     # invert sign to find servicer wrt sun
+        norms = np.linalg.norm(sun_arr, axis=1, keepdims=True)
+        sun_versors = sun_arr / norms
+
+        # compute the angle between sun-servicer-client (dot product for each line)
+        cos_angles = np.sum(sun_versors * self.versor_arr_meas, axis=1)     # each row correspond to cos(sun-client relative angle)
+        cos_lim = cos(alphaMax)
+        self.mask = cos_angles <= cos_lim                                  # saving only the angles<=alphaMax
+        print(f"valid points: {np.sum(self.mask)} over {len(self.mask)}")
+        self.df_client = self.applyMask(self.df_client)
+        self.df_servicer = self.applyMask(self.df_servicer)
+        self.versor_arr_comp = self.applyMask(self.versor_arr_comp)
+        self.versor_arr_meas = self.applyMask(self.versor_arr_meas)
+
+        ###################################################################################################################################
+        #    IN ALTERNATIVE We can devide the propagation in sub sets (as did for manouevers?) and save propagation effort from Orekit    #
+        ###################################################################################################################################
+
+    def applyMask(self, df):
+        '''
+        Apply the filter Mask found in FOV and SunPhaseAngle
+        input:
+            df: unfiltered dataframe
+        output:
+            df_filtered: filtered dataframe
+        '''
+        df_filtered = df[self.mask]
+        return df_filtered
+
+        
 
 
     def a_matrix (self, ee_step, df_state, prop_config_loop):
@@ -111,6 +165,7 @@ class Optimizer:
                     index_mod, data_mod = orb.propagate_orbits_wrapper(prop_config_loop)
                     data_mod = np.array([list(item) for item in data_mod])
                     df_state_mod = pd.DataFrame(data_mod, index=index_mod, columns=['randv_mks_0', 'randv_mks_1', 'randv_mks_2', 'randv_mks_3', 'randv_mks_4', 'randv_mks_5'])
+                    # df_state_mod = self.applyMask(df_state_mod)
 
                     # Here comes the difference: we have to convert from "state" to "versor", that serves us as estimate for the precision (calculate residuals)
 
@@ -197,12 +252,13 @@ class Optimizer:
 
             self.prop_config_trial["Propagation"]["InitialState"] = rv_trial.tolist()
 
-            # Gemini suggestion to avoid a crash due to propagation of an impossible step (correction values too high):
+            # try/except: Gemini suggestion to avoid a crash due to propagation of an impossible step (correction values too high):
             # If the input configuration is non-physical, the stepsize is reduced to dump the correction:
 
             try:                                                            
                 index_trial, data_trial = orb.propagate_orbits_wrapper(self.prop_config_trial)
                 df_state_trial = pd.DataFrame(data=np.array(list(data_trial)), index=pd.DatetimeIndex(index_trial), columns=["randv_mks_{}".format(j) for j in range(6)])
+                # df_state_trial = self.applyMask(df_state_trial)
 
                 # Compute TRIAL versors
                 versor_trial = self.find_relative(df_state_trial)
@@ -358,6 +414,9 @@ class Optimizer:
             ee_final (array): Final optimized equinoctial elements (6,).
             loop (int): Total number of iterations it took to converge (or max out).
         """      
+
+        # filter out for FOV and Sun Phase Angle
+        # self.Sun_visibilityFactor()
 
         # Find initial relative direction (from initial guess orbit propagation)
         versor_arr_init = self.find_relative(self.df_client)
