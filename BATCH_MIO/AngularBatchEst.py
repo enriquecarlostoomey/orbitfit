@@ -105,7 +105,7 @@ class Optimizer:
     def Sun_visibilityFactor(self):
         """
         Find the angle between sun-servicer-client to exclude non-visibility situations (backlight)
-        The direction between sun and servicer is been assumed to be the same of sun-earth
+        The direction between sun and servicer is been assumed to be the same of sun-earth.
 
         Input:
             alphaMax: Max angle to gvuarantee target visibility (offset 90 deg)
@@ -138,7 +138,7 @@ class Optimizer:
         # Anyway, the computational effort from Orekit would be the same if we filter the data before the call, since it has 
         # to propagate the orbit from the first to the last point --> no need to change it
 
-    def applyMask(self, df, invert=False):
+    def applyMask(self, df):
         '''
         Apply the filter Mask found in FOV and SunPhaseAngle
         input:
@@ -147,10 +147,8 @@ class Optimizer:
             df_filtered: filtered dataframe
         '''
         if self.alphaMax != 0 or self.FOV != 0:
-            if invert == True:
-                df = df[~self.mask]
-            else:
-                df = df[self.mask]
+            df = df[self.mask]
+            
         return df
 
         
@@ -244,7 +242,7 @@ class Optimizer:
 
         # Cost function: control of the goodness of the next step (if too long, reduce the step)
         # (if new<old accept new step)
-        cost_old = np.sum(np.linalg.norm(b, axis=1)**2)
+        cost_old = np.sum((np.linalg.norm(b* self.W, axis=1)**2))
 
         # Damping parameter and scaling
 
@@ -296,7 +294,7 @@ class Optimizer:
 
                 # Compute TRIAL residuals and cost
                 b_trial = self.versor_arr_meas - versor_trial
-                cost_trial = np.sum(np.linalg.norm(b_trial, axis=1)**2)
+                cost_trial = np.sum((np.linalg.norm(b_trial*self.W, axis=1)**2))
 
             except Exception as e:                 
                 # INTEGRATOR CRASHED: The trial state is physically impossible.
@@ -351,7 +349,7 @@ class Optimizer:
         return df_state_trial, ee_step, versor_arr_comp, b
          
 
-    def lsqr (self, b_init, W, versor_arr_init):                                                   # HOW TO CHANGE THE CALL FOR EPSILON?
+    def lsqr (self, b_init, versor_arr_init):                                                   # HOW TO CHANGE THE CALL FOR EPSILON?
         """
         Runs the main iterative Batch Least Squares loop. It checks for convergence 
         based on the relative variation of the cost function (epsilon). In each iteration, 
@@ -407,7 +405,7 @@ class Optimizer:
 
 
         
-            aw = a * W
+            aw = a * self.W
             awat = np.einsum("ijk,ljk->il", aw, a)
             abw = np.einsum("ijk,jk->i", aw, b)
             
@@ -463,9 +461,9 @@ class Optimizer:
         b = self.versor_arr_meas - versor_arr_init      # residual vector (measured - computed versor) 
 
         # weight matrix (3N x 3N , diag)
-        W = np.tile(self.w_i, (self.n_measurements,1))       # shape (N, 3)
+        self.W = np.tile(self.w_i, (self.n_measurements,1))       # shape (N, 3)
     
         # Call the loop
-        df_optimized, ee_final, loop = self.lsqr (b, W, versor_arr_init)
+        df_optimized, ee_final, loop = self.lsqr (b, versor_arr_init)
 
         return df_optimized, ee_final, loop
