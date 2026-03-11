@@ -1,15 +1,12 @@
 import orbitfit.orbitfit as orb
-from orbitfit.utils import (oe2ee, oe2rv, ee2oe, rv2oe)
+from orbitfit.utils import (oe2ee, oe2rv)
 import dateutil.parser
-import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
 import datetime
 import copy
 import pandas as pd
 import numpy as np
-
 import BATCH_MIO.AngularBatchEst as ang
-import BATCH_MIO.PlotResultsFunc as pltt
+from BATCH_MIO.PlotResultsFunc import PLOTRESULTS
 
 
 #####################################################################################
@@ -22,12 +19,14 @@ import BATCH_MIO.PlotResultsFunc as pltt
 
 # DEFINE PARAMETERS FOR THE SIMULATION:
 
-propstep = 3600              # time step for propagation [s]
-duration = 24            # propagation time [h]
-MaxLoop = 30                # Max Loop in LS algorithm
-noise_std_dev_pos = 100     # Standard deviation of the client position noise (in m) for the measured versors computation
-noise_std_dev_vel = 10      # Standard deviation of the client velocity noise (in m/s) for the measured versors computation
-Epsilon = 1e-4              # condition to exit the LS loop
+propstep = 1800              # time step for propagation [s]
+duration = 15*24            # propagation time [h]
+MaxLoop = 30                # Max Loop in LS algorithm [-]
+noise_std_dev_pos = 100     # Standard deviation of the client position noise for the measured versors computation [m]
+noise_std_dev_vel = 10      # Standard deviation of the client velocity noise for the measured versors computation [m/s]
+Epsilon = 1e-9              # condition to exit the LS loop [-]
+FOV = 180                    # FOV semi-aperture to filter out-of-sight measurements [deg]
+alphaMax = 90               # Maximum sun phase angle to see the target [deg]
 
 # position and velocity of the client in ECI frame (in meters and m/s) (GEO orbit)
 epoch = dateutil.parser.parse("2021-03-09T16:08:14.991000Z")
@@ -36,7 +35,7 @@ pos, vel=  np.array(oe2rv(*oe_client_ECI))
 posvel_client_ECI_m = np.concatenate([pos, vel]) * 1e3 
 
 # The servicer is in sub-GEO (-300km radius)
-oe_servicer_ECI = np.array([42164.140-300, 1e-6, 1e-6, 1e-6, 1e-6, 1e-6])                         # GEO oe for servicer [km]
+oe_servicer_ECI = np.array([42164.140-300, 1e-6, 1e-6, 1e-6, 1e-6, -0.1])                         # GEO oe for servicer [km]
 pos, vel=  np.array(oe2rv(*oe_servicer_ECI))
 posvel_servicer_ECI_m = np.concatenate([pos, vel]) * 1e3                                          # GEO coordinates for servicer [m, m/s]
 
@@ -61,6 +60,7 @@ propagation_config['End'] = (epoch+datetime.timedelta(hours= duration)).strftime
 client_config["Propagation"] = propagation_config
 
 # Propagation
+print("\nInital orbits propagation...")
 index, data = orb.propagate_orbits_wrapper(servicer_config)
 df_servicer_ECI_m= pd.DataFrame(data=np.array(data), index=pd.DatetimeIndex(index), columns=["randv_mks_{}".format(i) for i in range(6)])
 
@@ -163,7 +163,7 @@ df_client_ECI_fit= pd.DataFrame(data=np.array(data), index=pd.DatetimeIndex(inde
 
 # Initialize the class
 
-print("\n\nInitializing Optimizer...\n")
+print("\nInitializing Optimizer...\n")
 estimator = ang.Optimizer(
     ee_initialguess=ee_initial_guess,      # Array degli elementi equinoziali (6,)
     df_client=df_client_ECI_fit,           # DataFrame (N,6) della prima propagazione guess
@@ -171,12 +171,15 @@ estimator = ang.Optimizer(
     versor_arr_meas=versor_arr_meas,       # Array (N,3) dei versori misurati (osservazioni)
     config=propagation_config,             # Solo il dizionario della propagazione (Step, Start, End)
     max_loops=MaxLoop,                      # (Opzionale) Numero massimo di iterazioni
-    epsilon=Epsilon
-)
+    epsilon=Epsilon,
+    fov = FOV,
+    alphamax = alphaMax
+    )
 
 ##Call to Batch estimator
 
 df_state_final, ee_final, n_loops = estimator.LSLoop()
+
 
 # Return optimized state df_state_final, ee_final
 
@@ -409,8 +412,13 @@ print()
 
 
 #######################################################
-# Try plotresults
+# apply the mask to the real vector
+versor_arr_rejected = estimator.applyMask(versor_arr_real, invert = True)
+versor_arr_real = estimator.applyMask(versor_arr_real)
+versor_arr_meas = estimator.applyMask(versor_arr_meas)
+df_client_ECI_m = estimator.applyMask(df_client_ECI_m)
+df_client_ECI_fit = estimator.applyMask(df_client_ECI_fit)
 
-Plot = pltt.PLOTRESULTS(versor_arr_real, versor_arr_meas, estimator.versor_arr_comp, df_client_ECI_m, df_client_ECI_fit, df_state_final, n_loops)
+Plot = PLOTRESULTS(versor_arr_real, versor_arr_rejected, versor_arr_meas, estimator.versor_arr_comp, df_client_ECI_m, df_client_ECI_fit, df_state_final, n_loops)
 Plot.plotResiduals()
 Plot.plotFinalFit()

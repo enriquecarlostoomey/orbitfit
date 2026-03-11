@@ -6,13 +6,14 @@ import orbitfit.rotate as rot
 
 class PLOTRESULTS:
 
-    def __init__(self, versor_arr_real, versor_arr_meas, versor_arr_comp, df_client_real, df_client_init, df_state_final, n_loops = 0, rMax = 4e7):
+    def __init__(self, versor_arr_real, versor_arr_rejected, versor_arr_meas, versor_arr_comp, df_client_real, df_client_init, df_state_final, n_loops = 0, rMax = 4e7):
         """
         Class to plotresults for both residuals and final fit fior the Angle Based Least Square Optimization (AngularBatchEst)
 
         Inputs: 
             index: List of all dates from propagation (format yyyy-mm-ddThh:mm:ss.ss   es: 2021-03-09T16:08:14.991)
-            versor_arr_real: real (reference) versor from unperturbed simulated data 
+            versor_arr_real: real (reference) versor from unperturbed simulated data
+            versor_arr_rejected: rejected values from the filters (FOV, sun) 
             versor_arr_meas: measured (simulated, perturbed) versor utilised for the LS optimization
             versor_arr_comp; final optimized versors corresponding to final fitted orbit
             df_client_real: real (unperturbed) simulated r,v dataframe (in m, m/s) (lenght N)
@@ -24,6 +25,7 @@ class PLOTRESULTS:
             plots
         """
         self.versor_arr_real = versor_arr_real
+        self.versor_arr_rejected = versor_arr_rejected
         self.versor_arr_meas = versor_arr_meas
         self.versor_arr_comp = versor_arr_comp
         self.df_client_ECI_m = df_client_real
@@ -45,17 +47,9 @@ class PLOTRESULTS:
         n_meas = len(self.versor_arr_meas)
         time_steps = range(n_meas)
 
-        # Create figure with GridSpec for layout management
-        fig = plt.figure(figsize=(18, 10))
-        gs = gridspec.GridSpec(2, 3, height_ratios=[1.2, 1]) # Top row slightly taller
-
-        # --- ROW 1: Evolution of individual components X, Y, Z ---
-        # Each subplot compares Real, Measured, and Computed for a single axis
-
         # First we rotate everything in ECEF frame (LVLH for GEO)
         time_index = self.df_client_ECI_m.index
-        cols = [f'randv_mks_{i}' for i in range(6)]  # 0 to 5
-        cols_pos = ['randv_mks_0', 'randv_mks_1', 'randv_mks_2'] # position columns
+        cols = [f'randv_mks_{i}' for i in range(6)]         # 0 to 5 for compatibility with rotate_gps
 
         # initialyze empty array (we have to "fake" velocities)
         zeri = np.zeros_like(self.versor_arr_real)
@@ -64,54 +58,52 @@ class PLOTRESULTS:
         versors_real_6d = np.hstack((-self.versor_arr_real, zeri))
         df_versors_real = pd.DataFrame(versors_real_6d, index=time_index, columns=cols)
         df_versors_real_rot = rot.rotate_gps(df_versors_real, method="I2E")
-        versors_real = df_versors_real_rot[cols_pos].values             # only position estracted
+        versors_real = df_versors_real_rot.iloc[:, 0:3].values             # only position estracted
+
+        # --- REJECTED VALUES ---
+        versors_rej = np.hstack((-self.versor_arr_real, zeri))
+        df_versors_rej = pd.DataFrame(versors_rej, index=time_index, columns=cols)
+        df_versors_rej_rot = rot.rotate_gps(df_versors_rej, method="I2E")
+        versors_rej = df_versors_rej_rot.iloc[:, 0:3].values             # only position estracted
 
         # --- MEASURED VERSORS ---
         versors_meas_6d = np.hstack((-self.versor_arr_meas, zeri))
         df_versors_meas = pd.DataFrame(versors_meas_6d, index=time_index, columns=cols)
         df_versors_meas_rot = rot.rotate_gps(df_versors_meas, method="I2E")
-        versors_meas = df_versors_meas_rot[cols_pos].values
+        versors_meas = df_versors_meas_rot.iloc[:, 0:3].values
 
         # --- FINAL VERSORS ---
         versors_final_6d = np.hstack((-self.versor_arr_comp, zeri))
         df_versors_final = pd.DataFrame(versors_final_6d, index=time_index, columns=cols)
         df_versors_final_rot = rot.rotate_gps(df_versors_final, method="I2E")
-        versors_final = df_versors_final_rot[cols_pos].values
+        versors_final = df_versors_final_rot.iloc[:, 0:3].values
 
-        # 1. X-Y Plane per i Versori REALI (Truth)
-        ax1 = fig.add_subplot(gs[0, 0])
-        ax1.plot(versors_real[:, 0], versors_real[:, 1], label='Real Trajectory', color='green', linewidth=2)
-        # Segna il punto di partenza
-        ax1.plot(versors_real[0, 0], versors_real[0, 1], marker='*', color='black', markersize=10, label='Start') 
-        ax1.set_title('Relative Motion X-Y (Real)')
-        ax1.set_xlabel('Versor X (ECEF)')
-        ax1.set_ylabel('Versor Y (ECEF)')
-        ax1.set_aspect('equal', adjustable='datalim') # FONDAMENTALE per non distorcere l'orbita
-        ax1.grid(True, linestyle='--', alpha=0.6)
-        ax1.legend()
+        # Inityializing the figure
+        fig = plt.figure(figsize=(12, 12))
+        gs = gridspec.GridSpec(2, 1, height_ratios=[1.5, 1])
+        ax_xy = fig.add_subplot(gs[0])
 
-        # 2. X-Y Plane per i Versori CALCOLATI (Final Fit)
-        # Condividiamo X e Y con ax1 per un confronto visivo diretto 1:1
-        ax2 = fig.add_subplot(gs[0, 1], sharex=ax1, sharey=ax1) 
-        ax2.plot(versors_final[:, 0], versors_final[:, 1], label='Fitted Trajectory', color='blue', linestyle='--', linewidth=2)
-        # Segna il punto di partenza
-        ax2.plot(versors_final[0, 0], versors_final[0, 1], marker='*', color='black', markersize=10, label='Start')
-        ax2.set_title('Relative Motion X-Y (Final Fit)')
-        ax2.set_xlabel('Versor X (ECEF)')
-        # ax2.set_ylabel('Versor Y (ECEF)') # Nascosto perché condivide l'asse Y con ax1
-        ax2.set_aspect('equal', adjustable='datalim')
-        ax2.grid(True, linestyle='--', alpha=0.6)
-        ax2.legend()
+        # Real Trajectory
+        ax_xy.plot(versors_real[:, 0], versors_real[:, 1], label='Real Trajectory (Truth)', color='green', linewidth=2)
+        ax_xy.plot(versors_real[0, 0], versors_real[0, 1], marker='*', color='green', markersize=10) # Start point
 
-        # # 3. Z Component (Index 2)
-        # ax3 = fig.add_subplot(gs[0, 2], sharey=ax1)
-        # ax3.plot(time_steps, versors_real[:, 2], label='Real (Truth)', color='green', linewidth=2)
-        # ax3.plot(time_steps, versors_meas[:, 2], label='Measured (Noisy)', color='red', alpha=0.5)
-        # ax3.plot(time_steps, versors_final[:, 2], label='Final Computed', color='blue', linestyle='--', linewidth=2)
-        # ax3.set_title('Z Component Evolution')
-        # ax3.set_xlabel('Measurement Index')
-        # ax3.grid(True, linestyle='--', alpha=0.6)
-        # ax3.legend()
+        # Rejected points
+        ax_xy.plot(versors_rej[:, 0], versors_rej[:, 1], label='Rejected points', color='grey', linewidth=1)
+
+        # Initial Guess / Measured
+        ax_xy.plot(versors_meas[:, 0], versors_meas[:, 1], label='Initial Guess (Measured)', color='red', alpha=0.5, linestyle=':')
+        ax_xy.plot(versors_meas[0, 0], versors_meas[0, 1], marker='*', color='red', markersize=10) # Start point
+
+        # Final Computed
+        ax_xy.plot(versors_final[:, 0], versors_final[:, 1], label='Final Fitted Trajectory', color='blue', linestyle='--', linewidth=2)
+        ax_xy.plot(versors_final[0, 0], versors_final[0, 1], marker='*', color='blue', markersize=10) # Start point
+
+        ax_xy.set_title('Relative Motion X-Y Plane')
+        ax_xy.set_xlabel('Versor X (ECEF)')
+        ax_xy.set_ylabel('Versor Y (ECEF)')
+        ax_xy.set_aspect('equal', adjustable='box') # Mantiene le proporzioni corrette
+        ax_xy.grid(True, linestyle='--', alpha=0.6)
+        ax_xy.legend()
 
 
         # --- ROW 2: Residuals Comparison (Absolute Error) ---

@@ -6,13 +6,11 @@ import numpy as np
 # for sun direction:
 from astropy.time import Time
 from astropy.coordinates import get_sun
-from math import cos, pi
-
 class Optimizer:
-        # Function to initialize and launch the LS Loop optimization
+    # Function to initialize and run the LS Loop optimization
 
     def __init__(self, ee_initialguess, df_client, df_servicer, versor_arr_meas, config, config_0=None, 
-                 damping_lambda=0.001, max_loops=30, epsilon=1e-9, w_i=None, deltaamtchg=1e-7, percentchg=1e-6):
+                 damping_lambda=0.001, max_loops=30, epsilon=1e-9, w_i=None, deltaamtchg=1e-7, percentchg=1e-6, fov=0, alphamax=0):
         """
         Initializes the Optimizer class with the initial state guess, reference datasets, 
         measurements, propagation configurations, and Levenberg-Marquardt solver parameters.
@@ -26,11 +24,13 @@ class Optimizer:
             --config_0 (dict): Full STK_CONFIG dictionary for the propagator template.
             --damping_lambda (float): Initial damping parameter for the Levenberg-Marquardt algorithm.
             --max_loops (int): Maximum number of iterations allowed before forcing termination.
-            --versor_arr_real (ndarray): Real/True relative directions (versors) in ECI frame (N, 3), used for final evaluation and plotting.
+            --versor_arr_meas (ndarray): Measured relative directions (versors) in ECI frame (N, 3), used for LSQR optimization.
             --epsilon (float, optional): Relative tolerance threshold for the Levenberg-Marquardt convergence check (default 1e-10).
             --w_i (vector[]): Weight vector for the 3 spatial components. Defaults to [1.0, 1.0, 1.0].
             --deltaamtchg (float, optional): Minimum absolute perturbation step for the Jacobian finite differences (default 1e-7).
-            --percentchg (float, optional): Relative perturbation percentage for the Jacobian finite differences (default 1e-6).            
+            --percentchg (float, optional): Relative perturbation percentage for the Jacobian finite differences (default 1e-6).
+            --fov: FOV semi-aperture to filter out-of-sight measurements, in degrees (if == 0 filter not applied - default)
+            --alphamax: Maximum sun phase angle to see the target, in degrees (if == 0 filter not applied - default)         
         Output:
             None
         """
@@ -38,14 +38,19 @@ class Optimizer:
         self.df_client = df_client                      # otherwise we can propagate it inside from e_initial
         self.df_servicer = df_servicer
         self.versor_arr_meas = versor_arr_meas
-        self.n_measurements = len(versor_arr_meas)
         self.propagation_config = config
         self.ee_initial = ee_initialguess
         self.max_loops = max_loops
         self.damping_lambda = damping_lambda
         self.epsilon = epsilon
         self.deltaamtchg = deltaamtchg
-        self.percentchg = percentchg        
+        self.percentchg = percentchg   
+
+        # Initialize the mask and filters values
+        self.mask = np.ones(len(self.versor_arr_meas), dtype=bool) 
+        self.FOV = fov
+        self.alphaMax = alphamax
+
         # weighting matrix initialization
         if w_i is None:
             self.w_i = np.array([1.0, 1.0, 1.0])
@@ -72,11 +77,32 @@ class Optimizer:
         diff = df_client_current.iloc[:, :3].values - self.df_servicer.iloc[:, :3].values
         ranges = np.linalg.norm(diff, axis=1)[:, np.newaxis] # Shape (N, 1)
         return diff / ranges # Shape (N, 3)
-    
+        
     def FOV_factor(self):
-        pass
+        """
+        Find the angle between earth normal-servicer-client to exclude out of FOV situations (zenithal pointing assumed)
 
-    def Sun_visibilityFactor(self, alphaMax=pi/2):
+        Input:
+            FOV: semi aperture of Field of View (in degrees)
+        Output:
+            Updates self.mask keeping only the values inside the FOV.
+        """        
+        # Normalized position vectors
+        normal_versors = self.df_servicer[["randv_mks_0", "randv_mks_1", "randv_mks_2"]].values.astype(float)
+        norms = np.linalg.norm(normal_versors, axis=1, keepdims=True)
+        normal_versors = normal_versors / norms
+
+        # Compare with visibility condition
+        cos_angles = np.sum(normal_versors * self.versor_arr_meas, axis=1)
+        cos_lim = np.cos(np.radians(self.FOV))
+        fov_mask = cos_angles >= cos_lim 
+
+        # combine with the existing mask
+        self.mask = self.mask & fov_mask
+
+        print(f"valid points after FOV filter: {np.sum(self.mask)} over {len(self.mask)}")
+
+    def Sun_visibilityFactor(self):
         """
         Find the angle between sun-servicer-client to exclude non-visibility situations (backlight)
         The direction between sun and servicer is been assumed to be the same of sun-earth
@@ -84,6 +110,7 @@ class Optimizer:
         Input:
             alphaMax: Max angle to gvuarantee target visibility (offset 90 deg)
         Output:
+            self.mask: Mask of "good" values 
         """
         # time vector
         times = Time(self.df_servicer.index)
@@ -99,19 +126,19 @@ class Optimizer:
 
         # compute the angle between sun-servicer-client (dot product for each line)
         cos_angles = np.sum(sun_versors * self.versor_arr_meas, axis=1)     # each row correspond to cos(sun-client relative angle)
-        cos_lim = cos(alphaMax)
-        self.mask = cos_angles <= cos_lim                                  # saving only the angles<=alphaMax
-        print(f"valid points: {np.sum(self.mask)} over {len(self.mask)}")
-        self.df_client = self.applyMask(self.df_client)
-        self.df_servicer = self.applyMask(self.df_servicer)
-        self.versor_arr_comp = self.applyMask(self.versor_arr_comp)
-        self.versor_arr_meas = self.applyMask(self.versor_arr_meas)
+        cos_lim = np.cos(np.radians(self.alphaMax))
+        sun_mask = cos_angles >= cos_lim                                  # saving only the angles>=alphaMax
 
-        ###################################################################################################################################
-        #    IN ALTERNATIVE We can devide the propagation in sub sets (as did for manouevers?) and save propagation effort from Orekit    #
-        ###################################################################################################################################
+        # combine with the existing mask
+        self.mask = self.mask & sun_mask
 
-    def applyMask(self, df):
+        print(f"valid points after sun direction filter: {np.sum(self.mask)} over {len(self.mask)}")
+
+        # This filter is applied AFTER the propagation, so Orekit computes all the points and then we cancle the unwanted ones. 
+        # Anyway, the computational effort from Orekit would be the same if we filter the data before the call, since it has 
+        # to propagate the orbit from the first to the last point --> no need to change it
+
+    def applyMask(self, df, invert=False):
         '''
         Apply the filter Mask found in FOV and SunPhaseAngle
         input:
@@ -119,8 +146,12 @@ class Optimizer:
         output:
             df_filtered: filtered dataframe
         '''
-        df_filtered = df[self.mask]
-        return df_filtered
+        if self.alphaMax != 0 or self.FOV != 0:
+            if invert == True:
+                df = df[~self.mask]
+            else:
+                df = df[self.mask]
+        return df
 
         
 
@@ -165,7 +196,7 @@ class Optimizer:
                     index_mod, data_mod = orb.propagate_orbits_wrapper(prop_config_loop)
                     data_mod = np.array([list(item) for item in data_mod])
                     df_state_mod = pd.DataFrame(data_mod, index=index_mod, columns=['randv_mks_0', 'randv_mks_1', 'randv_mks_2', 'randv_mks_3', 'randv_mks_4', 'randv_mks_5'])
-                    # df_state_mod = self.applyMask(df_state_mod)
+                    df_state_mod = self.applyMask(df_state_mod)
 
                     # Here comes the difference: we have to convert from "state" to "versor", that serves us as estimate for the precision (calculate residuals)
 
@@ -258,7 +289,7 @@ class Optimizer:
             try:                                                            
                 index_trial, data_trial = orb.propagate_orbits_wrapper(self.prop_config_trial)
                 df_state_trial = pd.DataFrame(data=np.array(list(data_trial)), index=pd.DatetimeIndex(index_trial), columns=["randv_mks_{}".format(j) for j in range(6)])
-                # df_state_trial = self.applyMask(df_state_trial)
+                df_state_trial = self.applyMask(df_state_trial)
 
                 # Compute TRIAL versors
                 versor_trial = self.find_relative(df_state_trial)
@@ -393,7 +424,7 @@ class Optimizer:
             versor_cost = np.linalg.norm(versor_arr_comp - self.versor_arr_meas, axis=1)
             
             print("")
-            print(f"Iteration {loop}: Absolut erro on versors : {np.sum(versor_cost)}")
+            print(f"Iteration {loop} - Sum of all the versors residuals: {np.sum(versor_cost)}")
             print("")
 
         self.versor_arr_comp = versor_arr_comp
@@ -416,7 +447,14 @@ class Optimizer:
         """      
 
         # filter out for FOV and Sun Phase Angle
-        # self.Sun_visibilityFactor()
+        if self.alphaMax != 0:
+            self.Sun_visibilityFactor() 
+        if self.FOV != 0:
+            self.FOV_factor()      
+        self.df_client = self.applyMask(self.df_client)
+        self.df_servicer = self.applyMask(self.df_servicer)
+        self.versor_arr_meas = self.applyMask(self.versor_arr_meas)
+        self.n_measurements = len(self.versor_arr_meas)
 
         # Find initial relative direction (from initial guess orbit propagation)
         versor_arr_init = self.find_relative(self.df_client)
