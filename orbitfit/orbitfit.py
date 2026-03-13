@@ -37,7 +37,7 @@ STK_CONFIG = {'Gravity': {'Degree': 21, 'Order': 21},
               'SolidTides': {'Sun': True, 'Moon': True},
               'ThirdBodies': {'Sun': True, 'Moon': True},
               'RadiationPressure': {'Sun': True, 'Creflection': {'Value': 1.0}},
-              'SpaceObject': {'Mass': 8, 'Area': 0.3,
+              'SpaceObject': {'Mass': 2000, 'Area': 15,
                               'Attitude': {'Provider': 'NADIR_POINTING', 'SpinVelocity': [0.0, 0.0, 0.0],
                                            'SpinAcceleration': [0.0, 0.0, 0.0]}}}
 

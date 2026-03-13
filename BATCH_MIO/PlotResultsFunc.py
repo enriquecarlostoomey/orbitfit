@@ -3,16 +3,19 @@ import matplotlib.gridspec as gridspec
 import numpy as np
 import pandas as pd
 import orbitfit.rotate as rot
+from astropy.coordinates import get_sun
+from astropy.time import Time
 
 class PLOTRESULTS:
 
-    def __init__(self, versor_arr_real, versor_arr_meas, versor_arr_comp, df_client_real, df_client_init, df_state_final, n_loops = 0, rMax = 4e7):
+    def __init__(self, versor_arr_real, versor_arr_real_filt, versor_arr_meas, versor_arr_comp, df_client_real_unfilt, df_client_real, 
+                 df_client_init, df_state_final, df_servicer, n_loops = 0, rMax = 4e7):
         """
         Class to plotresults for both residuals and final fit fior the Angle Based Least Square Optimization (AngularBatchEst)
 
         Inputs: 
             index: List of all dates from propagation (format yyyy-mm-ddThh:mm:ss.ss   es: 2021-03-09T16:08:14.991)
-            versor_arr_real: real (reference) versor from unperturbed simulated data
+            versor_arr_real: real (reference) versor from unperturbed unfiltered simulated data
             versor_arr_rejected: rejected values from the filters (FOV, sun) 
             versor_arr_meas: measured (simulated, perturbed) versor utilised for the LS optimization
             versor_arr_comp; final optimized versors corresponding to final fitted orbit
@@ -24,14 +27,17 @@ class PLOTRESULTS:
         Outputs:
             plots
         """
-        self.versor_arr_real = versor_arr_real
+        self.versor_arr_real_unfilt = versor_arr_real
+        self.versor_arr_real = versor_arr_real_filt
         self.versor_arr_meas = versor_arr_meas
         self.versor_arr_comp = versor_arr_comp
+        self.df_client_ECI_unfilt = df_client_real_unfilt
         self.df_client_ECI_m = df_client_real
         self.df_client_ECI_fit = df_client_init
         self.df_state_final = df_state_final
         self.n_loops = n_loops
         self.rMax = rMax
+        self.df_servicer = df_servicer
 
     def plotResiduals(self):
 
@@ -48,15 +54,16 @@ class PLOTRESULTS:
 
         # First we rotate everything in ECEF frame (LVLH for GEO)
         time_index = self.df_client_ECI_m.index
-        time_index2 = self.df_client_ECI_m.index
+        time_index2 = self.df_client_ECI_unfilt.index
         cols = [f'randv_mks_{i}' for i in range(6)]         # 0 to 5 for compatibility with rotate_gps
 
         # initialyze empty array (we have to "fake" velocities)
         zeri = np.zeros_like(self.versor_arr_real)
+        zeri2 = np.zeros_like(self.versor_arr_real_unfilt)
 
         # --- REAL VERSORS ---
-        versors_real_6d = np.hstack((self.versor_arr_real, zeri))
-        df_versors_real = pd.DataFrame(versors_real_6d, index=time_index, columns=cols)
+        versors_real_6d = np.hstack((self.versor_arr_real_unfilt, zeri2))
+        df_versors_real = pd.DataFrame(versors_real_6d, index=time_index2, columns=cols)
         df_versors_real_rot = rot.rotate_gps(df_versors_real, method="I2E")
         versors_real = df_versors_real_rot.iloc[:, 0:3].values             # only position estracted
 
@@ -77,12 +84,9 @@ class PLOTRESULTS:
         gs = gridspec.GridSpec(2, 1, height_ratios=[1.5, 1])
         ax_xy = fig.add_subplot(gs[0])
 
-        # Unfiltered background Trajectory
+        # Real, unfiltered Trajectory
         ax_xy.plot(versors_real[:, 0], versors_real[:, 1], label='Real Trajectory (Truth)', color='grey', linewidth=1)
-
-        # Real Trajectory
-        ax_xy.plot(versors_real[:, 0], versors_real[:, 1], label='Real Trajectory (Truth)', color='green', linewidth=2, linestyle='None', marker='.')
-        ax_xy.plot(versors_real[0, 0], versors_real[0, 1], marker='*', color='green', markersize=10) # Start point
+        ax_xy.plot(versors_real[0, 0], versors_real[0, 1], marker='*', color='grey', markersize=10) # Start point
 
         # Initial Guess / Measured
         ax_xy.plot(versors_meas[:, 0], versors_meas[:, 1], label='Initial Guess (Measured)', color='red', alpha=0.5, linestyle='None', marker='.')
@@ -92,12 +96,12 @@ class PLOTRESULTS:
         ax_xy.plot(versors_final[:, 0], versors_final[:, 1], label='Final Fitted Trajectory', color='blue', linestyle='None', linewidth=2, marker='.')
         ax_xy.plot(versors_final[0, 0], versors_final[0, 1], marker='*', color='blue', markersize=10) # Start point
 
-        ax_xy.set_title('Relative Motion X-Y Plane')
+        ax_xy.set_title('Relative Motion X-Y Plane - Versors in ECEF')
         ax_xy.set_xlabel('Versor X (ECEF)')
         ax_xy.set_ylabel('Versor Y (ECEF)')
         ax_xy.set_aspect('equal', adjustable='box') # Mantiene le proporzioni corrette
-        ax_xy.set_xlim([-1, 1])
-        ax_xy.set_ylim([-1, 1])
+        ax_xy.set_xlim([-1.1, 1.1])
+        ax_xy.set_ylim([-1.1, 1.1])
         ax_xy.grid(True, linestyle='--', alpha=0.6)
         ax_xy.legend()
 
@@ -133,14 +137,23 @@ class PLOTRESULTS:
     def plotFinalFit(self):
         
         # ==============================================================================
-        # ---       FINAL RESULTS ON THE ORBIT (ABSOLUTE POSITION)                   ---
+        # ---       FINAL RESULTS ON THE ORBIT (ABSOLUTE POSITION in ECI)            ---
         # ==============================================================================
 
-
+        # Scaling factor
+        lim_min = -4e7
+        lim_max = self.rMax * 1.1
+    
         # 3D plot of original client orbit self.df_client_ECI_m and the perturbated initial guess self.df_client_ECI_fit:
 
         fig = plt.figure(figsize=(12, 10))
         ax = fig.add_subplot(111, projection='3d')
+
+        # Plot original unfiltered client orbit
+        ax.scatter(self.df_client_ECI_unfilt["randv_mks_0"],
+                self.df_client_ECI_unfilt["randv_mks_1"],
+                self.df_client_ECI_unfilt["randv_mks_2"],
+                label="Unfiltered Orbit", color="grey", s=0.5, linestyle=':')
 
         # Plot original client orbit
         ax.scatter(self.df_client_ECI_m["randv_mks_0"],
@@ -153,6 +166,25 @@ class PLOTRESULTS:
                 self.df_client_ECI_fit["randv_mks_1"],
                 self.df_client_ECI_fit["randv_mks_2"],
                 label="Initial guess Orbit", color="green", s=5)
+        
+                # Plot sun direction
+        t_start = Time(self.df_client_ECI_m.index[0])
+        sun_coor = get_sun(t_start)
+        sun_pos = sun_coor.cartesian.xyz.to('m').value
+        sun_vec = sun_pos / np.linalg.norm(sun_pos)
+        light_direction = -sun_vec * lim_max * 0.5
+        # Target position to plot incoming light
+        target_pos = np.mean(self.df_client_ECI_m.iloc[:, :3].values, axis=0)
+        start_point = target_pos + (sun_vec * lim_max * 0.5)
+
+        # Plot Quiver
+        ax.quiver(start_point[0], start_point[1], start_point[2], 
+                  light_direction[0], light_direction[1], light_direction[2], 
+                  color='orange', label='Incoming Sunlight', 
+                  linewidth=1.5, arrow_length_ratio=0.3)
+        # plot a little sun
+        ax.scatter(start_point[0], start_point[1], start_point[2], 
+                   color='orange', s=50, marker='*')
 
         ax.set_xlabel("X (m)")
         ax.set_ylabel("Y (m)")
@@ -160,8 +192,6 @@ class PLOTRESULTS:
         ax.set_title("Original vs Initial guess Orbit")
         ax.legend()
 
-        lim_min = -4e7
-        lim_max = self.rMax * 1.1
         ax.set_xlim([lim_min, lim_max])
         ax.set_ylim([lim_min, lim_max])
         ax.set_zlim([lim_min, lim_max])
@@ -171,6 +201,12 @@ class PLOTRESULTS:
 
         fig = plt.figure(figsize=(12, 10))
         ax = fig.add_subplot(111, projection='3d')
+
+        # Plot original unfiltered client orbit
+        ax.scatter(self.df_client_ECI_unfilt["randv_mks_0"],
+                self.df_client_ECI_unfilt["randv_mks_1"],
+                self.df_client_ECI_unfilt["randv_mks_2"],
+                label="Unfiltered Orbit", color="grey", s=0.5, linestyle=':')
 
         # Plot original client orbit
         ax.scatter(self.df_client_ECI_m["randv_mks_0"],
@@ -183,6 +219,39 @@ class PLOTRESULTS:
                 self.df_state_final["randv_mks_1"],
                 self.df_state_final["randv_mks_2"],
                 label="Final Fitted Orbit", color="green", s=5)
+        
+        # Plot Servicer Orbit
+        ax.plot(self.df_servicer["randv_mks_0"],
+                self.df_servicer["randv_mks_1"],
+                self.df_servicer["randv_mks_2"],
+                label="Servicer Orbit (Observer)", 
+                color="blue", linestyle='--', linewidth=1, alpha=0.7) 
+
+        # single point for the current/starting position of the servicer
+        ax.scatter(self.df_servicer["randv_mks_0"].iloc[0],
+                   self.df_servicer["randv_mks_1"].iloc[0],
+                   self.df_servicer["randv_mks_2"].iloc[0],
+                   color="blue", s=5, marker='o')
+        
+        # Plot sun direction
+        t_start = Time(self.df_client_ECI_m.index[0])
+        sun_coor = get_sun(t_start)
+        sun_pos = sun_coor.cartesian.xyz.to('m').value
+        sun_vec = sun_pos / np.linalg.norm(sun_pos)
+        light_direction = -sun_vec * lim_max * 0.5
+        # Target position to plot incoming light
+        target_pos = np.mean(self.df_client_ECI_m.iloc[:, :3].values, axis=0)
+        start_point = target_pos + (sun_vec * lim_max * 0.5)
+
+        # Plot Quiver
+        ax.quiver(start_point[0], start_point[1], start_point[2], 
+                  light_direction[0], light_direction[1], light_direction[2], 
+                  color='orange', label='Incoming Sunlight', 
+                  linewidth=1.5, arrow_length_ratio=0.3)
+        # plot a little sun
+        ax.scatter(start_point[0], start_point[1], start_point[2], 
+                   color='orange', s=50, marker='*')
+
 
         ax.set_xlabel("X (m)")
         ax.set_ylabel("Y (m)")
@@ -224,7 +293,7 @@ class PLOTRESULTS:
         ax[0].set_title('Comparison of Orbital Position Differences')
         ax[0].legend()
         ax[0].grid(True, which='both', linestyle='--', alpha=0.5)
-        #ax[0].set_yscale('log') # Usiamo scala logaritmica per vedere il miglioramento
+        ax[0].set_yscale('log') # Usiamo scala logaritmica per vedere il miglioramento
 
         # Sottoplot 2: Velocità
         ax[1].plot(df_true.index, err_vel_orig_init, label='Original vs Initial Guess', color='red')
@@ -235,7 +304,7 @@ class PLOTRESULTS:
         ax[1].set_xlabel('Time')
         ax[1].legend()
         ax[1].grid(True, which='both', linestyle='--', alpha=0.5)
-        #ax[1].set_yscale('log')
+        ax[1].set_yscale('log')
 
         plt.tight_layout()
         plt.show()

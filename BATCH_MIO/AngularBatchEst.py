@@ -10,7 +10,7 @@ class Optimizer:
     # Function to initialize and run the LS Loop optimization
 
     def __init__(self, ee_initialguess, df_client, df_servicer, versor_arr_meas, config, config_0=None, 
-                 damping_lambda=0.001, max_loops=30, epsilon=1e-9, w_i=None, deltaamtchg=1e-7, percentchg=1e-6, fov=0, alphamax=0):
+                 damping_lambda=0.001, max_loops=30, epsilon=1e-9, w_i=None, deltaamtchg=1e-7, percentchg=1e-6, fov=0, alphamax=0, m_v_threshold=1e6):
         """
         Initializes the Optimizer class with the initial state guess, reference datasets, 
         measurements, propagation configurations, and Levenberg-Marquardt solver parameters.
@@ -30,7 +30,9 @@ class Optimizer:
             --deltaamtchg (float, optional): Minimum absolute perturbation step for the Jacobian finite differences (default 1e-7).
             --percentchg (float, optional): Relative perturbation percentage for the Jacobian finite differences (default 1e-6).
             --fov: FOV semi-aperture to filter out-of-sight measurements, in degrees (if == 0 filter not applied - default)
-            --alphamax: Maximum sun phase angle to see the target, in degrees (if == 0 filter not applied - default)         
+            --alphamax: Maximum sun phase angle to see the target, in degrees (if == 0 filter not applied - default)   
+            --m_v_threshold: Maximum magnitude of reflected light to see the target, in log scale (if == 0 filter not applied - default) 
+                                                                                (suggested value 13, see the function for more details)      
         Output:
             None
         """
@@ -50,6 +52,7 @@ class Optimizer:
         self.mask = np.ones(len(self.versor_arr_meas), dtype=bool) 
         self.FOV = fov
         self.alphaMax = alphamax
+        self.m_v_threshold = m_v_threshold
 
         # weighting matrix initialization
         if w_i is None:
@@ -78,7 +81,13 @@ class Optimizer:
         ranges = np.linalg.norm(diff, axis=1)[:, np.newaxis] # Shape (N, 1)
         return diff / ranges # Shape (N, 3)
         
-    def FOV_factor(self):
+
+    #------------------------------------------#
+    #       Filters implementation:            #
+    #------------------------------------------#
+
+
+    def FOV_filter(self):
         """
         Find the angle between earth normal-servicer-client to exclude out of FOV situations (zenithal pointing assumed)
 
@@ -87,22 +96,36 @@ class Optimizer:
         Output:
             Updates self.mask keeping only the values inside the FOV.
         """        
+
+        ###############################
+        # ADD an offset if not zenithal pointing (instead of normal_versors)
+        ###########
+
+        if  self.FOV == 0:
+            return
+        
         # Normalized position vectors
         normal_versors = self.df_servicer[["randv_mks_0", "randv_mks_1", "randv_mks_2"]].values.astype(float)
         norms = np.linalg.norm(normal_versors, axis=1, keepdims=True)
         normal_versors = normal_versors / norms
 
         # Compare with visibility condition
-        cos_angles = np.sum(normal_versors * self.versor_arr_meas, axis=1)
+        self.cos_angles = np.sum(normal_versors * self.versor_arr_meas, axis=1)
         cos_lim = np.cos(np.radians(self.FOV))
-        fov_mask = cos_angles >= cos_lim 
+        fov_mask = self.cos_angles >= cos_lim 
 
         # combine with the existing mask
         self.mask = self.mask & fov_mask
 
-        print(f"valid points after FOV filter: {np.sum(self.mask)} over {len(self.mask)}")
+        if np.sum(self.mask) == 0:
+            print ("All the points are filtered out. Exiting the simulation.")
+            self.max_loops = 0          # Force the exit from lsqr loop
+            return None
+        else:
+            print(f"valid points after FOV filter: {np.sum(self.mask)} over {len(self.mask)}")
 
-    def Sun_visibilityFactor(self):
+
+    def sunVisibility_filter(self):
         """
         Find the angle between sun-servicer-client to exclude non-visibility situations (backlight)
         The direction between sun and servicer is been assumed to be the same of sun-earth.
@@ -112,6 +135,10 @@ class Optimizer:
         Output:
             self.mask: Mask of "good" values 
         """
+
+        if  self.alphaMax == 0:
+            return
+        
         # time vector
         times = Time(self.df_servicer.index)
 
@@ -120,23 +147,122 @@ class Optimizer:
         sun_x = sun_coords.cartesian.x.to_value('m')
         sun_y = sun_coords.cartesian.y.to_value('m')
         sun_z = sun_coords.cartesian.z.to_value('m')
-        sun_arr = np.column_stack((-sun_x, -sun_y, -sun_z))     # invert sign to find servicer wrt sun
-        norms = np.linalg.norm(sun_arr, axis=1, keepdims=True)
-        sun_versors = sun_arr / norms
+        light_arr = np.column_stack((-sun_x, -sun_y, -sun_z))              # invert sign to find incoming light direction
+        norms = np.linalg.norm(light_arr, axis=1, keepdims=True)
+        light_versors = light_arr / norms
 
         # compute the angle between sun-servicer-client (dot product for each line)
-        cos_angles = np.sum(sun_versors * self.versor_arr_meas, axis=1)     # each row correspond to cos(sun-client relative angle)
+        cos_angles = np.sum(light_versors * self.versor_arr_meas, axis=1)  # each row correspond to cos(sun-client relative angle)
         cos_lim = np.cos(np.radians(self.alphaMax))
-        sun_mask = cos_angles >= cos_lim                                  # saving only the angles>=alphaMax
+        sun_mask = cos_angles >= cos_lim                                 # saving only the angles>=alphaMax
 
         # combine with the existing mask
         self.mask = self.mask & sun_mask
 
-        print(f"valid points after sun direction filter: {np.sum(self.mask)} over {len(self.mask)}")
+        if np.sum(self.mask) == 0:
+            print ("All the points are filtered out. Exiting the simulation.")
+            self.max_loops = 0          # Force the exit from lsqr loop
+            return None
+        else:
+            print(f"valid points after sun direction filter: {np.sum(self.mask)} over {len(self.mask)}")
 
         # This filter is applied AFTER the propagation, so Orekit computes all the points and then we cancle the unwanted ones. 
         # Anyway, the computational effort from Orekit would be the same if we filter the data before the call, since it has 
         # to propagate the orbit from the first to the last point --> no need to change it
+
+
+    def detectability_filter(self, sun_flux=1361.0):
+        """
+        Find the incoming light reaching the camera from the servicer and compare with threshold detectability value.
+        Formulas taken from (and simplified): 
+        "Observations and Modeling of GEO Satellites at Large Phase Angles", Rita L. Cognion, "Oceanit"
+        https://amostech.com/TechnicalPapers/2013/POSTER/COGNION.pdf
+
+        Input:
+            None ()
+        Output:
+            self.mask: Mask of "good" values            
+        """
+
+        # VALUES FOR MAX MAGNITUDE:
+        # from Luis Calvo "Validation of models employed in the Far-Range Image Generator Software"
+        # considering an exposure time of 1s, 30|40 deg temperature:
+        # -No security factor: ~ 15.4|15.1 mag   -Security factor 10 ~ 13.3|13.0 mag    -Securyty factor 20 ~ 12.1|12.0 mag
+        # considering an exposure time of 0.1s, 30|40 deg temperasture:
+        # -No security factor: ~ 12.6|12.1 mag   -Security factor 10 ~ 10.6|10.6 mag    -Securyty factor 20 ~ 10|9.1 mag
+        # Inopur case: we don't need fast imaging, we can assume 1s exposure, security factor 10 --> magMax = 13
+
+        if  self.m_v_threshold == 1e6:
+            return
+
+        # time vector
+        times = Time(self.df_servicer.index)
+
+        # Extract the area from the nested dictionary
+        target_area = self.prop_config_0['SpaceObject']['Area'] 
+        # Convert cross-sectional area to equivalent radius r (according to the model)
+        r = np.sqrt(target_area / np.pi)
+        diff = self.df_client.iloc[:, :3].values - self.df_servicer.iloc[:, :3].values
+        d = np.linalg.norm(diff, axis=1)# Shape (N, )
+        self.d =d
+
+        #sun-earth position        
+        sun_coords = get_sun(times)
+        sun_x = sun_coords.cartesian.x.to_value('m')
+        sun_y = sun_coords.cartesian.y.to_value('m')
+        sun_z = sun_coords.cartesian.z.to_value('m')
+        
+        # invert sign to find incoming light direction
+        light_arr = np.column_stack((-sun_x, -sun_y, -sun_z))
+        norms = np.linalg.norm(light_arr, axis=1, keepdims=True)
+        light_versors = light_arr / norms
+
+        # compute the angle between sun-servicer-client (dot product for each line)
+        dot_prod = np.sum(light_versors * self.versor_arr_meas, axis=1)
+        phi = np.arccos(np.clip(dot_prod, -1.0, 1.0))       # according to gemini, to avoid "floating point errors, e.g. cos=1.0000001"
+
+        # Albedo computation
+        # settings limit according to the model
+        phi_min = np.radians(25)
+        phi_max = np.radians(100)
+        phi_for_poly = np.clip(phi, phi_min, None)
+        # Albedo value for each time
+        a_0 = (3.1765 * phi_for_poly**6 - 22.0968 * phi_for_poly**5 + 
+               62.182 * phi_for_poly**4 - 90.0993 * phi_for_poly**3 + 
+               70.3031 * phi_for_poly**2 - 27.9227 * phi_for_poly + 4.7373)
+
+        # if phi>100 deg: non detect.
+        a_0[phi > phi_max] = 0
+
+        # # flatten all vectors
+        # phi = phi.ravel()
+        # a_0 = a_0.ravel()
+        # d = np.array(d).ravel()
+
+        # reflected flux
+        phase_function = np.sin(phi) + (np.pi - phi) * np.cos(phi)
+        f_diff = (2/3) * a_0 * (r**2 / (np.pi * d**2)) * phase_function
+
+        self.m_v = np.full_like(phi, self.m_v_threshold+1)        # initialized as all false
+        valid = np.array(f_diff > 0).flatten()
+        self.m_v[valid] = -26.74 - 2.5 * np.log10(f_diff[valid] / sun_flux)
+
+        self.phi = phi
+        
+        # 5. Detectability Mask
+        # Un satellite è visibile se è PIÙ LUMINOSO della soglia (magnitudine MINORE)
+        det_mask = self.m_v < self.m_v_threshold
+
+        # mask update
+        self.mask = self.mask & det_mask
+        
+        if np.sum(self.mask) == 0:
+            print ("All the points are filtered out. Exiting the simulation.")
+            self.max_loops = 0          # Force the exit from lsqr loop
+            return None
+        else:
+            print(f"valid points after sun direction filter: {np.sum(self.mask)} over {len(self.mask)}")
+
 
     def applyMask(self, df):
         '''
@@ -146,12 +272,16 @@ class Optimizer:
         output:
             df_filtered: filtered dataframe
         '''
-        if self.alphaMax != 0 or self.FOV != 0:
+        if np.any(self.mask):       
             df = df[self.mask]
-            
-        return df
+        else:
+            print("Empty mask. Not applied.\n")
+        return df        
+    
 
-        
+    #-----------------------------------------------------------#
+    #       LSQR functions and logic implementation:            #
+    #-----------------------------------------------------------#
 
 
     def a_matrix (self, ee_step, df_state, prop_config_loop):
@@ -242,10 +372,10 @@ class Optimizer:
 
         # Cost function: control of the goodness of the next step (if too long, reduce the step)
         # (if new<old accept new step)
+
         cost_old = np.sum((np.linalg.norm(b* self.W, axis=1)**2))
 
         # Damping parameter and scaling
-
 
         # # A-priori covariance matrix to penalize and lock the semi-major axis (a)                                       To implement as optional args?
         # # Assuming 'a' is at index 2, 'af' at 0, 'ag' at 1 based on oe2ee conversion
@@ -383,10 +513,9 @@ class Optimizer:
         sigmaold2 = 30000.0
         ee_step = self.ee_initial
         df_step = self.df_client
-        self.prop_config_loop = copy.deepcopy(orb.STK_CONFIG)
-        self.prop_config_loop["Propagation"] = self.propagation_config
-        self.prop_config_0 = copy.deepcopy(self.prop_config_loop)
-        self.prop_config_trial = copy.deepcopy(self.prop_config_loop)
+        self.prop_config_0["Propagation"] = self.propagation_config
+        self.prop_config_loop = copy.deepcopy(self.prop_config_0)
+        self.prop_config_trial = copy.deepcopy(self.prop_config_0)
 
         # Compute initial error on versors
         versor_cost = np.linalg.norm(versor_arr_comp - self.versor_arr_meas, axis=1)
@@ -442,13 +571,22 @@ class Optimizer:
             df_optimized (DataFrame): Final optimized state of the client (N, 6).
             ee_final (array): Final optimized equinoctial elements (6,).
             loop (int): Total number of iterations it took to converge (or max out).
-        """      
+        """
+
+        ## ADD IF w=111 --> UNWEIGHTED case      
 
         # filter out for FOV and Sun Phase Angle
         if self.alphaMax != 0:
-            self.Sun_visibilityFactor() 
+            self.sunVisibility_filter() 
         if self.FOV != 0:
-            self.FOV_factor()      
+            self.FOV_filter()
+        if self.m_v_threshold != 1e6:
+            self.detectability_filter()
+
+        # Check if mask is empty
+        if np.sum(self.mask) == 0:
+            return 0, 0, 0      
+        
         self.df_client = self.applyMask(self.df_client)
         self.df_servicer = self.applyMask(self.df_servicer)
         self.versor_arr_meas = self.applyMask(self.versor_arr_meas)
