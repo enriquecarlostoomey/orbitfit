@@ -9,15 +9,15 @@ from astropy.coordinates import get_sun
 class Optimizer:
     # Function to initialize and run the LS Loop optimization
 
-    def __init__(self, ee_initialguess, df_client, df_servicer, versor_arr_meas, config, config_0=None, 
+    def __init__(self, df_client, df_client_real, df_servicer, versor_arr_meas, config, config_0=None, 
                  damping_lambda=0.001, max_loops=30, epsilon=1e-9, w_i=None, deltaamtchg=1e-7, percentchg=1e-6, fov=0, alphamax=0, m_v_threshold=1e6):
         """
         Initializes the Optimizer class with the initial state guess, reference datasets, 
         measurements, propagation configurations, and Levenberg-Marquardt solver parameters.
 
         Input:
-            --ee_initialguess (array): Initial guess for the client's equinoctial elements (6,).
-            --df_client (DataFrame): Initial propagated state of the client in ECI frame [m, m/s] (N, 6).
+            --df_client (DataFrame): Initial propagated state of the client in ECI frame from unflitered initial guess [m, m/s] (N, 6).
+            --df_client_real (DataFrame): 
             --df_servicer (DataFrame): Known, fixed state of the servicer in ECI frame [m, m/s] (N, 6).
             --versor_arr_meas (ndarray): Measured relative directions (versors) in ECI frame (N, 3).
             --config (dict): Orekit propagation configuration (Step, Start, End).
@@ -39,14 +39,15 @@ class Optimizer:
 
         self.df_client = df_client                      # otherwise we can propagate it inside from e_initial
         self.df_servicer = df_servicer
+        self.df_client_real = df_client_real
         self.versor_arr_meas = versor_arr_meas
         self.propagation_config = config
-        self.ee_initial = ee_initialguess
         self.max_loops = max_loops
         self.damping_lambda = damping_lambda
         self.epsilon = epsilon
         self.deltaamtchg = deltaamtchg
         self.percentchg = percentchg   
+        self.b_history = []                             
 
         # Initialize the mask and filters values
         self.mask = np.ones(len(self.versor_arr_meas), dtype=bool) 
@@ -202,7 +203,7 @@ class Optimizer:
         target_area = self.prop_config_0['SpaceObject']['Area'] 
         # Convert cross-sectional area to equivalent radius r (according to the model)
         r = np.sqrt(target_area / np.pi)
-        diff = self.df_client.iloc[:, :3].values - self.df_servicer.iloc[:, :3].values
+        diff = self.df_client_real.iloc[:, :3].values - self.df_servicer.iloc[:, :3].values
         d = np.linalg.norm(diff, axis=1)# Shape (N, )
         self.d =d
 
@@ -545,6 +546,7 @@ class Optimizer:
 
             # Update sigmanew for the control in "while..."
             sigmanew = np.mean(b ** 2 * self.w_i)
+            self.b_history.append(pd.DataFrame(b, columns=[f'Res_X_it{loop}', f'Res_Y_it{loop}', f'Res_Z_it{loop}']))           # converting b in panda format
 
             loop += 1
             # Compute error on versors
@@ -582,7 +584,6 @@ class Optimizer:
             self.FOV_filter()
         if self.m_v_threshold != 1e6:
             self.detectability_filter()
-
         # Check if mask is empty
         if np.sum(self.mask) == 0:
             return 0, 0, 0      
@@ -592,16 +593,23 @@ class Optimizer:
         self.versor_arr_meas = self.applyMask(self.versor_arr_meas)
         self.n_measurements = len(self.versor_arr_meas)
 
+        self.oe_initial = rv2oe(self.df_client.iloc[0, 0:3].values * 1e-3, self.df_client.iloc[0, 3:6].values * 1e-3)
+        self.ee_initial = np.array(oe2ee(*self.oe_initial), dtype=float)
+
         # Find initial relative direction (from initial guess orbit propagation)
         versor_arr_init = self.find_relative(self.df_client)
 
         # Initialize the residual wrt the measured directions
         b = self.versor_arr_meas - versor_arr_init      # residual vector (measured - computed versor) 
+        self.b_history.append(pd.DataFrame(b, columns=[f'Res_X_it{0}', f'Res_Y_it{0}', f'Res_Z_it{0}']))
 
         # weight matrix (3N x 3N , diag)
         self.W = np.tile(self.w_i, (self.n_measurements,1))       # shape (N, 3)
     
         # Call the loop
         df_optimized, ee_final, loop = self.lsqr (b, versor_arr_init)
+
+
+        self.b_history = pd.concat(self.b_history, axis=1)
 
         return df_optimized, ee_final, loop

@@ -6,8 +6,7 @@ import copy
 import pandas as pd
 import numpy as np
 import BATCH_MIO.AngularBatchEst as ang
-from BATCH_MIO.PlotResultsFunc import PLOTRESULTS
-
+from BATCH_MIO.PlotResultsFunc import PLOTRESULTS, plot_detectability
 
 #####################################################################################
 #                                                                                   #
@@ -19,23 +18,24 @@ from BATCH_MIO.PlotResultsFunc import PLOTRESULTS
 
 # DEFINE PARAMETERS FOR THE SIMULATION:
 
-propstep = 30              # time step for propagation [s]
-duration = 3            # propagation time [h]
-MaxLoop = 2                # Max Loop in LS algorithm [-]
+propstep = 45              # time step for propagation [s]
+duration = 22           # propagation time [h]
+MaxLoop = 40                # Max Loop in LS algorithm [-]
 noise_std_dev_pos = 100     # Standard deviation of the client position noise for the measured versors computation [m]
 noise_std_dev_vel = 10      # Standard deviation of the client velocity noise for the measured versors computation [m/s]
-Epsilon = 1e-7              # condition to exit the LS loop [-]
-FOV = 20                    # FOV semi-aperture to filter out-of-sight measurements [deg] - if 0 the filter is not activated
+Epsilon = 1e-9              # condition to exit the LS loop [-]
+FOV = 0                    # FOV semi-aperture to filter out-of-sight measurements [deg] - if 0 the filter is not activated
 alphaMax = 0               # Maximum sun phase angle to see the target [deg] - if 0 the filter is not activated
+magnitudeMax = 13          # 13 suggested (see comment in the related function)           
 
 # position and velocity of the client in ECI frame (in meters and m/s) (GEO orbit)
-epoch = dateutil.parser.parse("2021-03-09T16:08:14.991000Z")
-oe_client_ECI = np.array([42164.140, 1e-6, 1e-6, 1e-6, 1e-6, 1e-6])
+epoch = dateutil.parser.parse("2021-03-09T09:40:14.991000Z")
+oe_client_ECI = np.array([42164.140, 1e-6, 1e-6, 1e-6, 1e-6, 0.39])
 pos, vel=  np.array(oe2rv(*oe_client_ECI))
 posvel_client_ECI_m = np.concatenate([pos, vel]) * 1e3 
 
 # The servicer is in sub-GEO (-300km radius)
-oe_servicer_ECI = np.array([42164.140-300, 1e-6, 1e-6, 1e-6, 1e-6, -1e-6])                         # GEO oe for servicer [km]
+oe_servicer_ECI = np.array([42164.140-300, 1e-6, 1e-6, 1e-6, 1e-6, 0.39-np.deg2rad(1.8)])                         # GEO oe for servicer [km]
 pos, vel=  np.array(oe2rv(*oe_servicer_ECI))
 posvel_servicer_ECI_m = np.concatenate([pos, vel]) * 1e3                                          # GEO coordinates for servicer [m, m/s]
 
@@ -118,13 +118,13 @@ versor_arr_meas = df_relative_ECI_measured.iloc[:, :3].values / df_relative_ECI_
 ####################################################################################################################################################################
 
 
-
+rng = np.random.default_rng(seed=666)
 
 # initial guess: perturbed original initial OE for the client in ECI frame (same as nominal, but with small perturbations)
 oe_initial_guess = oe_client_ECI.copy()
-oe_initial_guess[0] += np.random.normal(0, 1)       # Add noise to semi-major axis                    [km]
+oe_initial_guess[0] += np.random.normal(0, 0.1)       # Add noise to semi-major axis                    [km]
 oe_initial_guess[1] += np.random.normal(0, 1e-2)    # Add noise to eccentricity                       [-]
-oe_initial_guess[2] += np.random.normal(0, 0.1)     # Add noise to inclination                        [rad]
+oe_initial_guess[2] += np.random.normal(0, 0.001)     # Add noise to inclination                        [rad]
 oe_initial_guess[3] += np.random.normal(0, 0.1)     # Add noise to argument of periapsis              [rad]
 oe_initial_guess[4] += np.random.normal(0, 0.1)     # Add noise to right ascension of ascending node  [rad]
 oe_initial_guess[5] += np.random.normal(0, 0.01)    # Add noise to true anomaly                       [rad]
@@ -165,15 +165,16 @@ df_client_ECI_fit= pd.DataFrame(data=np.array(data), index=pd.DatetimeIndex(inde
 
 print("\nInitializing Optimizer...\n")
 estimator = ang.Optimizer(
-    ee_initialguess=ee_initial_guess,      # Array degli elementi equinoziali (6,)
-    df_client=df_client_ECI_fit,           # DataFrame (N,6) della prima propagazione guess
-    df_servicer=df_servicer_ECI_m,         # DataFrame (N,6) della posizione del servicer (reale)
-    versor_arr_meas=versor_arr_meas,       # Array (N,3) dei versori misurati (osservazioni)
-    config=propagation_config,             # Solo il dizionario della propagazione (Step, Start, End)
+    df_client=df_client_ECI_fit,            # DataFrame (N,6) della prima propagazione guess
+    df_client_real=df_client_ECI_m,         # 
+    df_servicer=df_servicer_ECI_m,          # DataFrame (N,6) della posizione del servicer (reale)
+    versor_arr_meas=versor_arr_meas,        # Array (N,3) dei versori misurati (osservazioni)
+    config=propagation_config,              # Solo il dizionario della propagazione (Step, Start, End)
     max_loops=MaxLoop,                      # (Opzionale) Numero massimo di iterazioni
     epsilon=Epsilon,
     fov = FOV,
-    alphamax = alphaMax
+    alphamax = alphaMax,
+    m_v_threshold = magnitudeMax           
     )
 
 ##Call to Batch estimator
@@ -199,12 +200,37 @@ print()
 #    #                                      #
 #    ########################################
 
-# apply the mask to the real vector
-versor_arr_real = estimator.applyMask(versor_arr_real)
-versor_arr_meas = estimator.applyMask(versor_arr_meas)
-df_client_ECI_m = estimator.applyMask(df_client_ECI_m)
-df_client_ECI_fit = estimator.applyMask(df_client_ECI_fit)
+print("\n\nSimulated magnitude:\n")
+print({estimator.m_v.shape})
+print (estimator.m_v)
 
-Plot = PLOTRESULTS(versor_arr_real, versor_arr_meas, estimator.versor_arr_comp, df_client_ECI_m, df_client_ECI_fit, df_state_final, n_loops)
-Plot.plotResiduals()
-Plot.plotFinalFit()
+print("\n\nIncoming light angle [deg]:\n")
+print({estimator.phi.shape})
+print (np.rad2deg(estimator.phi))
+
+print("\n\nDistance [m]:\n")
+print({estimator.d.shape})
+print (estimator.d)
+
+print("\n\nBoolean logic mask\n")
+print(estimator.mask)
+
+# apply the mask to the real vector (if valid)
+
+if n_loops >1:
+    versor_arr_real_filt = estimator.applyMask(versor_arr_real)
+    versor_arr_meas_filt = estimator.applyMask(versor_arr_meas)
+    df_client_ECI_m_filt = estimator.applyMask(df_client_ECI_m)
+    df_client_ECI_fit_filt = estimator.applyMask(df_client_ECI_fit)
+
+    Plot = PLOTRESULTS(versor_arr_real, versor_arr_real_filt, versor_arr_meas_filt, estimator.versor_arr_comp, df_client_ECI_m, df_client_ECI_m_filt, 
+                       df_client_ECI_fit_filt, df_state_final, df_servicer_ECI_m, estimator.b_history, n_loops)
+    Plot.plotResiduals()
+    Plot.plotResidualsEvolution()
+    Plot.plotFinalFit()
+    if estimator.detectability_filter != 1e6:
+        plot_detectability(estimator.phi, estimator.d, estimator.m_v, estimator.m_v_threshold)
+    
+
+
+

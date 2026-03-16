@@ -9,7 +9,7 @@ from astropy.time import Time
 class PLOTRESULTS:
 
     def __init__(self, versor_arr_real, versor_arr_real_filt, versor_arr_meas, versor_arr_comp, df_client_real_unfilt, df_client_real, 
-                 df_client_init, df_state_final, df_servicer, n_loops = 0, rMax = 4e7):
+                 df_client_init, df_state_final, df_servicer, b_matrix = None, n_loops = 0, rMax = 4e7):
         """
         Class to plotresults for both residuals and final fit fior the Angle Based Least Square Optimization (AngularBatchEst)
 
@@ -22,6 +22,7 @@ class PLOTRESULTS:
             df_client_real: real (unperturbed) simulated r,v dataframe (in m, m/s) (lenght N)
             df_client_init: initial guess r,v dataframe for initialize the LS algorithm (in m, m/s) (lenght N)
             df_state_final: final r,v dataframe of the final fitted orbit (in m, m/s) (lenght N) 
+            b_matrix = matrix of temporal evolution of residuals vector (norm over x,y,z dimensions)
             n_loops: Number of iteration loops (optional)  
             rMax = Max radius / semi-major axis (for near circular orbit) for the plot-scale. Default r ~ r_GEO (in m)
         Outputs:
@@ -38,6 +39,7 @@ class PLOTRESULTS:
         self.n_loops = n_loops
         self.rMax = rMax
         self.df_servicer = df_servicer
+        self.df_residuals_matrix = b_matrix
 
     def plotResiduals(self):
 
@@ -121,6 +123,119 @@ class PLOTRESULTS:
 
         plt.tight_layout()
         plt.show() 
+
+
+
+    def plotResidualsEvolution(self):
+        """
+        Plots the evolution of the residual magnitude (3D Norm) across all optimizer iterations
+        using a continuous colormap and a reference target line.
+        """
+        # ==============================================================================
+        # --- 1. CALCULATE REFERENCE TARGET (INITIAL NOISE) AND FINAL FIT           ---
+        # ==============================================================================
+        
+        # Calculate the 3D magnitude (Norm) of the error relative to the truth
+        # Initial Measured Noise (Target to beat)
+        res_meas_magnitude = np.linalg.norm(self.versor_arr_real - self.versor_arr_meas, axis=1)
+        # Final Computed Fit Error
+        res_comp_magnitude = np.linalg.norm(self.versor_arr_real - self.versor_arr_comp, axis=1) 
+
+        n_measurements = len(self.versor_arr_meas)
+        measurement_index = np.arange(n_measurements)
+
+        # ==============================================================================
+        # --- 2. INITIALIZE FIGURE                                                   ---
+        # ==============================================================================
+        fig, ax = plt.subplots(figsize=(14, 8))
+
+        # ==============================================================================
+        # --- 3. PLOT EVOLUTION ACROSS ITERATIONS USING COLORMAP                     ---
+        # ==============================================================================
+        
+        # Check if the residuals history matrix was passed to the class
+        if hasattr(self, 'df_residuals_matrix') and self.df_residuals_matrix is not None:
+            
+            n_cols = self.df_residuals_matrix.shape[1]      # Total columns (X, Y, Z per iter)
+            n_iter = n_cols // 3                            # Number of iterations performed
+            
+            # Setup a continuous colormap
+            cmap_name = 'plasma_r'
+            cmap = plt.get_cmap(cmap_name)
+            norm_colors = plt.Normalize(vmin=0, vmax=n_iter - 1) # Normalize iteration number to 0-1
+
+            # Loop through each iteration to plot the error magnitude
+            for it in range(n_iter):
+                idx_start = it * 3
+                
+                # Extract X, Y, Z residuals for the current iteration using position (.iloc)
+                res_x = self.df_residuals_matrix.iloc[:, idx_start].values
+                res_y = self.df_residuals_matrix.iloc[:, idx_start + 1].values
+                res_z = self.df_residuals_matrix.iloc[:, idx_start + 2].values
+                
+                # Calculate the 3D Magnitude (Norm) of the error for each measurement point
+                magnitude_res = np.sqrt(res_x**2 + res_y**2 + res_z**2)
+                
+                # Get the color corresponding to this iteration
+                color = cmap(norm_colors(it))
+                
+                # Plot the curve for this specific iteration
+                # Note: We don't add labels here to keep the legend clean
+                ax.plot(measurement_index, magnitude_res, linestyle='-', 
+                        color=color, alpha=0.8, linewidth=1.5)
+            
+            # --- Add Colorbar ---
+            # Create a scalar mappable for the colorbar to map iteration numbers to colors
+            sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm_colors)
+            sm.set_array([]) # Required for colorbar to work
+            cbar = fig.colorbar(sm, ax=ax, pad=0.02)
+            cbar.set_label('Optimizer Iteration', rotation=270, labelpad=20, fontsize=12)
+
+        else:
+            print("[WARNING] df_residuals_matrix not found. Cannot plot iteration evolution.")
+            # If matrix is missing, still plot the final fit as fallback
+            ax.plot(measurement_index, res_comp_magnitude, color='blue', label='Final Fit Error', linewidth=2)
+
+        # ==============================================================================
+        # --- 4. PLOT REFERENCE TARGETS (SINGLE PLOT CALLS)                         ---
+        # ==============================================================================
+
+        # Plot the INITIAL MEASURED NOISE once as a thin grey dashed line (The 'Target')
+        ax.plot(measurement_index, res_meas_magnitude, color='grey', linestyle='--', 
+                linewidth=1, label='Initial Measured Noise (Target to Beat)')
+
+        # ==============================================================================
+        # --- 5. FORMATTING AND LEGEND (CUSTOM HANDLES)                              ---
+        # ==============================================================================
+        ax.set_xlabel('Measurement Index', fontsize=12)
+        ax.set_ylabel('Residual Magnitude (Norm 3D)', fontsize=12)
+        ax.set_title('Versor Residuals Evolution: Initial Noise vs Convergence History', fontsize=14)
+        ax.grid(True, linestyle='--', alpha=1)
+        
+        # 1. Get the existing handles and labels (the black dashed line)
+        handles, labels = ax.get_legend_handles_labels()
+        
+        # 2. Create proxy artists (fake lines) for the first and last iterations
+        if hasattr(self, 'df_residuals_matrix') and self.df_residuals_matrix is not None:
+            # Extract the exact colors from the colormap
+            color_start = cmap(norm_colors(0))             # Iteration 0 color
+            color_end = cmap(norm_colors(n_iter - 1))      # Last iteration color
+
+            # Create Line2D objects for the legend
+            line_start = plt.Line2D([0], [0], color=color_start, lw=2, label='Initial Guess (Iter 0)')
+            line_end = plt.Line2D([0], [0], color=color_end, lw=2, label=f'Final Fit (Iter {n_iter - 1})')
+
+            # 3. Add them to the existing legend handles
+            handles.extend([line_start, line_end])
+
+        # 4. Draw the updated legend
+        ax.legend(handles=handles, loc='upper right', frameon=True, fontsize=10)
+        
+        # Enable Logarithmic Scale for dynamic range
+        ax.set_yscale('log')
+
+        plt.tight_layout()
+        plt.show(block=False)
 
        
     def compute_errors(self, df_a, df_b):
@@ -325,3 +440,46 @@ class PLOTRESULTS:
         if self.n_loops!= 0:
             print("Iterations:")
             print({self.n_loops})
+
+def plot_detectability(phi, d, m_v, m_v_threshold):
+    """
+    Plots the evolution of Phase Angle, Distance, and Magnitude.
+    Input:
+        parameters from the detectability filter:
+        phi: Sun phase angle for each time [deg]
+        d: relative distance for each time [m]
+        m_v: magnitude of incoming radiation in logaritmic scale
+        m_v_threshold: threshold for the accept/reject logic
+    Output:
+        Plot()
+    """
+    # Creazione della figura
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 12), sharex=True)
+    time_axis = range(len(phi)) # Oppure usa self.df_servicer.index se vuoi le date
+
+    # 1. Plot Phase Angle
+    ax1.plot(time_axis, np.rad2deg(phi), color='orange', linewidth=2)
+    ax1.set_ylabel('Sun Phase Angle [deg]')
+    ax1.grid(True, linestyle=':', alpha=0.6)
+    ax1.set_title('Detectability Factors Evolution')
+
+    # 2. Plot Distance
+    ax2.plot(time_axis, d, color='royalblue', linewidth=2)
+    ax2.set_ylabel('Distance [m]')
+    ax2.grid(True, linestyle=':', alpha=0.6)
+
+    # 3. Plot Magnitude
+    ax3.plot(time_axis, m_v, color='crimson', linewidth=2, label='Apparent Mag ($m_v$)')
+    # Plot threshold
+    ax3.axhline(y=m_v_threshold, color='black', linestyle='--', linewidth=1.5, label='Threshold')
+    
+    # Invert magnitude axis (under the line: rejected)
+    ax3.set_ylim(bottom=max(m_v_threshold + 2, np.max(m_v[m_v < 1e6])), 
+                top=min(np.min(m_v) - 1, 0)) 
+    ax3.set_ylabel('Visual Magnitude')
+    ax3.set_xlabel('Step [M]')
+    ax3.legend(loc='upper right')
+    ax3.grid(True, linestyle=':', alpha=0.6)
+
+    plt.tight_layout()
+    plt.show()
