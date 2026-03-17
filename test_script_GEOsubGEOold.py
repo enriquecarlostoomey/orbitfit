@@ -1,5 +1,5 @@
 import orbitfit.orbitfit as orb
-from orbitfit.utils import (oe2ee, oe2rv, rv2oe, ee2oe)
+from orbitfit.utils import (oe2ee, oe2rv)
 import dateutil.parser
 import datetime
 import copy
@@ -15,20 +15,18 @@ from BATCH_MIO.PlotResultsFunc import PLOTRESULTS, plot_detectability
 #####################################################################################
 
 
-# The perturbation for measured versors are now applied directly to the versors to mantain physical consistency
-# the perturbation on initial guess has been implemented in the cartesian state vector
+
 # DEFINE PARAMETERS FOR THE SIMULATION:
 
-propstep = 30               # time step for propagation [s]
-duration = 22             # propagation time [h]
-MaxLoop = 45                # Max Loop in LS algorithm [-]
-noise_std_dev_pos = 1000    # Standard deviation of the client position noise for the initial guess perturbation [m]
-noise_std_dev_vel = 10      # Standard deviation of the client velocity noise for the initial guess perturbation [m/s]
-sigma_rad = 1.7453e-05      # Angular error for the measured versors (bot azimuth and elevation)(small) [rad]
+propstep = 60              # time step for propagation [s]
+duration = 20           # propagation time [h]
+MaxLoop = 20                # Max Loop in LS algorithm [-]
+noise_std_dev_pos = 100     # Standard deviation of the client position noise for the measured versors computation [m]
+noise_std_dev_vel = 10      # Standard deviation of the client velocity noise for the measured versors computation [m/s]
 Epsilon = 1e-9              # condition to exit the LS loop [-]
-FOV = 0                     # FOV semi-aperture to filter out-of-sight measurements [deg] - if 0 the filter is not activated
-alphaMax = 0                # Maximum sun phase angle to see the target [deg] - if 0 the filter is not activated
-magnitudeMax = 13          # 13 suggested (see comment in the related function) - if 1e6 the filter is not activated         
+FOV = 0                    # FOV semi-aperture to filter out-of-sight measurements [deg] - if 0 the filter is not activated
+alphaMax = 0               # Maximum sun phase angle to see the target [deg] - if 0 the filter is not activated
+magnitudeMax = 1e6          # 13 suggested (see comment in the related function) - if 1e6 the filter is not activated         
 
 # position and velocity of the client in ECI frame (in meters and m/s) (GEO orbit)
 epoch = dateutil.parser.parse("2021-03-09T09:40:14.991000Z")
@@ -85,47 +83,57 @@ versor_arr_real = df_relative_ECI_real.iloc[:, :3].values / df_relative_ECI_real
 
 ## MEASURED DATA
 
-# Perturb the real versors to obtain the measured ones.
+# Perturb the client state to obtain the noisy measurements
+# Number of measurements
+n_measurements = len(df_relative_ECI_real)
 
-versor_arr_meas = copy.deepcopy(versor_arr_real)
-rng = np.random.default_rng(seed=666)
+# Add noise to the relative position and velocity measurements
+# Columns 0-2 are position; columns 3-5 are velocity components
 
-# 1. Genera rumore gaussiano 3D per ogni versore
-# Usiamo sigma_rad come deviazione standard per le componenti trasversali
-noise = rng.normal(0, sigma_rad, versor_arr_meas.shape)
+df_client_ECI_perturbed = df_client_ECI_m.copy()
 
-# 2. Rendi il rumore perpendicolare al versore originale
-# Proiezione: n_perp = n - (n . v) * v
-dot_products = np.sum(noise * versor_arr_meas, axis=1, keepdims=True)
-noise_perp = noise - dot_products * versor_arr_meas
+# add position noise
+df_client_ECI_perturbed.iloc[:, :3] += np.random.normal(
+    0, noise_std_dev_pos, (n_measurements, 3))
+# add velocity noise to all three components at once
+df_client_ECI_perturbed.iloc[:, 3:6] += np.random.normal(
+    0, noise_std_dev_vel, (n_measurements, 3))
 
-# 3. Aggiungi il rumore perpendicolare al versore originale
-versor_arr_meas = versor_arr_meas + noise_perp
 
-# 4. Rinormalizza per garantire che siano ancora versori unitari
-norms = np.linalg.norm(versor_arr_meas, axis=1, keepdims=True)
-versor_arr_meas = versor_arr_meas / norms
+# Find the measured relative direction (versor)
+df_relative_ECI_measured = df_client_ECI_perturbed.copy()
+df_relative_ECI_measured.iloc[:, :3] -= df_servicer_ECI_m.iloc[:, :3].values  # Subtract servicer position from client position
+df_relative_ECI_measured["range_m"] = np.linalg.norm(df_relative_ECI_measured.iloc[:, :3].values, axis=1)
+
+# compute measured versor components
+versor_arr_meas = df_relative_ECI_measured.iloc[:, :3].values / df_relative_ECI_measured["range_m"].values.reshape(-1, 1)
 
 
 
 
 ####################################################################################################################################################################
 # We have simulated the measurements, now we can proceed with the orbit fitting using the measured versor and range (with noise) as input for the fitting process. # 
-# we need an initial guess for the servicer orbit, (r,v) state vector. (since we don't have the range) to find the computed versor and compare it with the         #
-# measured one, and minimize the error with a LS algorithm. We want to retrieve the best approx for the unperturbed original orbit.                                #
+# we need an initial guess for the servicer orbit (since we don't have the range) to find the computed versor and compare it with the measured one,                #
+# and minimize the error with a LS algorithm. We want to retrieve the best approx for the unperturbed original orbit.                                              #
 ####################################################################################################################################################################
 
 
 rng = np.random.default_rng(seed=666)
 
 # initial guess: perturbed original initial OE for the client in ECI frame (same as nominal, but with small perturbations)
-rv_initial_guess = df_client_ECI_m.iloc[0].to_numpy(copy=True)
-rv_initial_guess[:3] += rng.normal(0, noise_std_dev_pos, 3)
-rv_initial_guess[3:] += rng.normal(0, noise_std_dev_vel, 3)
+oe_initial_guess = oe_client_ECI.copy()
+#oe_initial_guess[0] += np.random.normal(0, 0.1)       # Add noise to semi-major axis                    [km]
+oe_initial_guess[1] += np.random.normal(0, 1e-2)    # Add noise to eccentricity                       [-]
+oe_initial_guess[2] += np.random.normal(0, 0.001)     # Add noise to inclination                        [rad]
+oe_initial_guess[3] += np.random.normal(0, 0.1)     # Add noise to argument of periapsis              [rad]
+oe_initial_guess[4] += np.random.normal(0, 0.1)     # Add noise to right ascension of ascending node  [rad]
+oe_initial_guess[5] += np.random.normal(0, 0.01)    # Add noise to true anomaly                       [rad]
 
-# obtain oe and ee for the initial guess
-oe_initial_guess = rv2oe(rv_initial_guess[:3] * 1e-3, rv_initial_guess[3:] * 1e-3)
+pos, vel = oe2rv(*oe_initial_guess)
+rv_initial_guess = np.concatenate((pos, vel))*1e3
 ee_initial_guess = np.array(oe2ee(*oe_initial_guess))
+
+
 
 
 #####################################################################################
@@ -192,30 +200,6 @@ print()
 #    #                                      #
 #    ########################################
 
-np.set_printoptions(linewidth=150, precision=8, suppress=False) # correct display of matrix
-
-print("\n\nFinal Covariance Matrix:\n")
-print({estimator.covariance_matrix.shape})
-print (estimator.covariance_matrix)
-
-print("\n\nFinal ST deviation on unknowns:\n")
-print (estimator.param_errors)
-
-
-# apply the mask to the real vector (if valid)
-
-if n_loops >1:
-    versor_arr_real_filt = estimator.applyMask(versor_arr_real)
-    versor_arr_meas_filt = estimator.applyMask(versor_arr_meas)
-    df_client_ECI_m_filt = estimator.applyMask(df_client_ECI_m)
-    df_client_ECI_fit_filt = estimator.applyMask(df_client_ECI_fit)
-
-    Plot = PLOTRESULTS(versor_arr_real, versor_arr_real_filt, versor_arr_meas_filt, estimator.versor_arr_comp, df_client_ECI_m, df_client_ECI_m_filt, 
-                       df_client_ECI_fit_filt, df_state_final, df_servicer_ECI_m, estimator.b_history, n_loops)
-    Plot.plotResiduals()
-    Plot.plotResidualsEvolution()
-    Plot.plotFinalFit()
-    
 if magnitudeMax != 1e6:
     print("\n\nSimulated magnitude:\n")
     print({estimator.m_v.shape})
@@ -232,5 +216,22 @@ if magnitudeMax != 1e6:
     print("\n\nBoolean logic mask\n")
     print(estimator.mask)
 
-    plot_detectability(estimator.phi, estimator.d, estimator.m_v, estimator.m_v_threshold)
+# apply the mask to the real vector (if valid)
+
+if n_loops >1:
+    versor_arr_real_filt = estimator.applyMask(versor_arr_real)
+    versor_arr_meas_filt = estimator.applyMask(versor_arr_meas)
+    df_client_ECI_m_filt = estimator.applyMask(df_client_ECI_m)
+    df_client_ECI_fit_filt = estimator.applyMask(df_client_ECI_fit)
+
+    Plot = PLOTRESULTS(versor_arr_real, versor_arr_real_filt, versor_arr_meas_filt, estimator.versor_arr_comp, df_client_ECI_m, df_client_ECI_m_filt, 
+                       df_client_ECI_fit_filt, df_state_final, df_servicer_ECI_m, estimator.b_history, n_loops)
+    Plot.plotResiduals()
+    Plot.plotResidualsEvolution()
+    Plot.plotFinalFit()
+    if estimator.detectability_filter != 1e6:
+        plot_detectability(estimator.phi, estimator.d, estimator.m_v, estimator.m_v_threshold)
+    
+
+
 

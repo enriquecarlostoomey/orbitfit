@@ -54,6 +54,7 @@ class Optimizer:
         self.FOV = fov
         self.alphaMax = alphamax
         self.m_v_threshold = m_v_threshold
+        self.phi = 0
 
         # weighting matrix initialization
         if w_i is None:
@@ -222,23 +223,28 @@ class Optimizer:
         dot_prod = np.sum(light_versors * self.versor_arr_meas, axis=1)
         phi = np.arccos(np.clip(dot_prod, -1.0, 1.0))       # according to gemini, to avoid "floating point errors, e.g. cos=1.0000001"
 
-        # Albedo computation
-        # settings limit according to the model
-        phi_min = np.radians(25)
-        phi_max = np.radians(100)
-        phi_for_poly = np.clip(phi, phi_min, None)
-        # Albedo value for each time
-        a_0 = (3.1765 * phi_for_poly**6 - 22.0968 * phi_for_poly**5 + 
-               62.182 * phi_for_poly**4 - 90.0993 * phi_for_poly**3 + 
-               70.3031 * phi_for_poly**2 - 27.9227 * phi_for_poly + 4.7373)
+        # Albedo computation using cosines and specific Cognion polynomials
+        cos_150 = np.cos(np.radians(150))
+        cos_100 = np.cos(np.radians(100))
+        cos_25  = np.cos(np.radians(25))
 
-        # if phi>100 deg: non detect.
-        a_0[phi > phi_max] = 0
+        a_0 = np.zeros_like(dot_prod)
 
-        # # flatten all vectors
-        # phi = phi.ravel()
-        # a_0 = a_0.ravel()
-        # d = np.array(d).ravel()
+        # Case 1: phi < 100 deg (First Polynomial)
+        mask_poly1 = (dot_prod > cos_100)
+        dot_prod_clip1 = np.clip(dot_prod[mask_poly1], None, cos_25)        # handle the <25 deg case as =25 deg
+        phi1 = np.arccos(dot_prod_clip1)
+        a_0[mask_poly1] = (3.1765 * phi1**6 - 22.0968 * phi1**5 + 
+                           62.182 * phi1**4 - 90.0993 * phi1**3 + 
+                           70.3031 * phi1**2 - 27.9227 * phi1 + 4.7373)
+
+        # Case 2: 100 <= phi < 150 deg (Second Polynomial)
+        mask_poly2 = (dot_prod <= cos_100) & (dot_prod > cos_150)
+        phi2 = np.arccos(dot_prod[mask_poly2])
+        a_0[mask_poly2] = (-1.8016 * phi2**3 + 7.4251 * phi2**2 - 10.158 * phi2 + 4.634)
+
+        # Case 3: phi >= 150 deg (a_0 remains 0)
+
 
         # reflected flux
         phase_function = np.sin(phi) + (np.pi - phi) * np.cos(phi)
@@ -251,7 +257,6 @@ class Optimizer:
         self.phi = phi
         
         # 5. Detectability Mask
-        # Un satellite è visibile se è PIÙ LUMINOSO della soglia (magnitudine MINORE)
         det_mask = self.m_v < self.m_v_threshold
 
         # mask update
@@ -344,7 +349,7 @@ class Optimizer:
         return np.asarray(a) 
     
 
-    def LevenbergMarquardt (self, b, abw, awat, ee_step, max_diag, loop, df_step_old, versor_arr_comp_old):
+    def LevenbergMarquardt (self, b, abw, awat, ee_step, loop, df_step_old, versor_arr_comp_old, max_diag = 1):
         """
         Executes the inner loop of the Levenberg-Marquardt algorithm. Applies a scaled damping 
         factor to the normal equations and solves for the state correction step (dx). 
@@ -392,9 +397,17 @@ class Optimizer:
 
         while not step_accepted:
             
+            # extracting the values for each lambda parameter.
+            diag_awat = np.diag(awat)
+            diag_awat_safe = np.where(diag_awat > 1e-12, diag_awat, 1e-12)  # correct to avoid singularities (no division by 0)
+
             # Apply damping and A-priori penalty
-            matrice_damping = np.eye(6) * (self.damping_lambda * max_diag)
-            awat_damped = awat + matrice_damping # + P_inv_apriori                                                        # if "a-priori" is implemented
+            matrice_damping = np.diag(self.damping_lambda * diag_awat_safe)
+
+            # Otherwise (unweighted lambda):
+            #matrice_damping = np.eye(6) * (self.damping_lambda * max_diag)
+
+            awat_damped = awat + matrice_damping # + P_inv_apriori          # if "a-priori" is implemented
 
             # Solve for the state update step (dx)
             inv_awat = np.linalg.inv(awat_damped) 
@@ -448,7 +461,7 @@ class Optimizer:
                 
                 if flag ==  True:               # the damping parameter is increaed only if the previous step was accepted
                     # 2. Decrease damping factor to take larger Newton-like steps next time
-                    self.damping_lambda = max(1e-5, self.damping_lambda / 10.0) 
+                    self.damping_lambda = max(1e-6, self.damping_lambda / 10.0) 
                     print(f"Damping paramter reduced to {self.damping_lambda:.6f}.")
                 else: 
                     print(f"Damping paramter maintained at {self.damping_lambda:.6f}.")
@@ -470,7 +483,7 @@ class Optimizer:
                 if self.damping_lambda >= 1e9:
                     print("   -> WARNING: Damping limit reached. Stopping optimization.")
                     print("\nForcing the exit from the minimization loop ( step(t)=step(t-1) ).\n")
-                    print("We're probably stucked in a local minimum.")                    
+                    print("We're stucked!")                    
                     step_accepted = True # Force exit to prevent infinite loop
                     df_state_trial = df_step_old
                     versor_arr_comp = versor_arr_comp_old
@@ -542,7 +555,7 @@ class Optimizer:
             # CALL Levenberg-Marquardt logic function
             max_diag = np.max(np.diag(awat))
             
-            df_step, ee_step, versor_arr_comp, b = self.LevenbergMarquardt(b, abw, awat, ee_step, max_diag, loop, df_step, versor_arr_comp)
+            df_step, ee_step, versor_arr_comp, b = self.LevenbergMarquardt(b, abw, awat, ee_step, loop, df_step, versor_arr_comp, max_diag)
 
             # Update sigmanew for the control in "while..."
             sigmanew = np.mean(b ** 2 * self.w_i)
@@ -555,6 +568,30 @@ class Optimizer:
             print("")
             print(f"Iteration {loop} - Sum of all the versors residuals: {np.sum(versor_cost)}")
             print("")
+
+            # Check termination reasons
+        print("\n--- Optimization Terminated ---")
+        if not (abs((sigmanew - sigmaold) / sigmaold) >= self.epsilon):
+            print(f"Termination: Convergence reached (Relative change in sigma {abs((sigmanew - sigmaold) / sigmaold):.2e} < epsilon)")
+        
+        if not (loop < self.max_loops):
+            print(f"Termination: Maximum number of iterations reached (loop = {loop})")
+        
+        if not (sigmanew >= self.epsilon):
+            print(f"Termination: Absolute error sigma is below threshold (sigmanew = {sigmanew:.2e})")
+            
+        if (sigmanew > sigmaold) and (sigmaold > sigmaold2) and (sigmanew > 500000.0):
+            print("Termination: Divergence detected (Sigma has increased for two consecutive steps and exceeds safety limit)")
+
+        # exportinmg the covariance matrix P to see the predicted quality of the final fit
+        inv_awat = np.linalg.inv(awat)
+        n_obs = len(self.versor_arr_meas) * 3 # 3 componenti per ogni versore
+        dof = n_obs - 6 # Gradi di libertà
+        sigma_squared = (sigmanew**2)
+
+        # compute adn save covariance and std of the 6 unknowns (sqrt(variance))
+        self.covariance_matrix = inv_awat * sigma_squared 
+        self.param_errors = np.sqrt(np.diag(self.covariance_matrix))       
 
         self.versor_arr_comp = versor_arr_comp
         
