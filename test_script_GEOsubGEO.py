@@ -16,7 +16,7 @@ from BATCH_MIO.PlotResultsFunc import PLOTRESULTS, plot_detectability
 #####################################################################################
 
 # comments to besaved in the final output:
-comments = "\nNothing new?\n"
+comments = "\nincreased eccentricity, but the encounter is not at perigee (magMax increased)\n"
 
 # The perturbation for measured versors are now applied directly to the versors to mantain physical consistency
 # the perturbation on initial guess has been implemented in the cartesian state vector
@@ -31,13 +31,14 @@ sigma_rad = 1.7453e-05      # Angular error for the measured versors (bot azimut
 Epsilon = 1e-9              # condition to exit the LS loop [-]
 FOV = 0                     # FOV semi-aperture to filter out-of-sight measurements [deg] - if 0 the filter is not activated
 alphaMax = 0                # Maximum sun phase angle to see the target [deg] - if 0 the filter is not activated
-magnitudeMax = 130           # 13 suggested (see comment in the related function) - if 1e6 the filter is not activated
+magnitudeMax = 16           # 13 suggested (see comment in the related function) - if 1e6 the filter is not activated
+fov_offset = 30
 seed = 100         
 
 
-epoch = dateutil.parser.parse("2021-06-09T07:08:14.991000Z") 
-oe_client_ECI = np.array([42164.140, 1e-6, 1e-6, 1e-6, 1e-6, 3.14])
-oe_servicer_ECI = np.array([42164.140-300, 1e-6, 1e-6, 1e-6, 1e-6, 3.14-np.deg2rad(0.8)]) 
+epoch = dateutil.parser.parse("2021-03-09T09:40:14.991000") 
+oe_client_ECI = [42164.14, 1e-06, 1e-06, 1e-06, 0, 2.5]  #[a, e, i, Omega, omega, M]
+oe_servicer_ECI = [41864.14, 0.1, 1e-06, 1e-06, 0, 2.5-np.deg2rad(1)]  #[a, e, i, Omega, omega, M]
 
 # position and velocity of the client in ECI frame (in meters and m/s) (GEO orbit)
 pos, vel=  np.array(oe2rv(*oe_client_ECI))
@@ -171,6 +172,7 @@ estimator = ang.Optimizer(
     max_loops=MaxLoop,                      # (Opzionale) Numero massimo di iterazioni
     epsilon=Epsilon,
     fov = FOV,
+    fov_offset=fov_offset,
     alphamax = alphaMax,
     m_v_threshold = magnitudeMax           
     )

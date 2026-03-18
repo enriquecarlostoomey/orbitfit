@@ -126,7 +126,7 @@ class PLOTRESULTS:
         if self.save_dir:
             import os
             fig.savefig(os.path.join(self.save_dir, "residualsplot.png"), dpi=200)
-        plt.show() 
+        plt.show(block=False) 
 
 
 
@@ -465,7 +465,7 @@ class PLOTRESULTS:
             f.write(str(np.linalg.norm(err_pos_orig_final)) + "\n")
             f.write("\nMax error between final and real positions:\n")
             f.write(str(np.max(err_pos_orig_final)) + "\n")
-        plt.show()
+        plt.show(block=False)
 
 def plot_detectability(phi, d, m_v, m_v_threshold, save_dir=None):
     """
@@ -511,4 +511,4 @@ def plot_detectability(phi, d, m_v, m_v_threshold, save_dir=None):
     if save_dir:
         import os
         fig.savefig(os.path.join(save_dir, "sunFilter.png"), dpi=200)
-    plt.show()
+    plt.show(block=False)

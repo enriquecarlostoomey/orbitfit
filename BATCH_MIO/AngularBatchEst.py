@@ -8,9 +8,11 @@ from astropy.time import Time
 from astropy.coordinates import get_sun
 class Optimizer:
     # Function to initialize and run the LS Loop optimization
+    # fov_offset never insert
+    # We could add other parameters as input instead of fixed
 
     def __init__(self, df_client, df_client_real, df_servicer, versor_arr_meas, config, config_0=None, 
-                 damping_lambda=0.001, max_loops=30, epsilon=1e-9, w_i=None, deltaamtchg=1e-7, percentchg=1e-6, fov=0, alphamax=0, m_v_threshold=1e6):
+                 damping_lambda=0.001, max_loops=30, epsilon=1e-9, w_i=None, deltaamtchg=1e-7, percentchg=1e-6, fov=0, fov_offset = 0, alphamax=0, m_v_threshold=1e6):
         """
         Initializes the Optimizer class with the initial state guess, reference datasets, 
         measurements, propagation configurations, and Levenberg-Marquardt solver parameters.
@@ -18,23 +20,23 @@ class Optimizer:
         Input:
             --df_client (DataFrame): Initial propagated state of the client in ECI frame from unflitered initial guess [m, m/s] (N, 6).
             --df_client_real (DataFrame): 
-            --df_servicer (DataFrame): Known, fixed state of the servicer in ECI frame [m, m/s] (N, 6).
-            --versor_arr_meas (ndarray): Measured relative directions (versors) in ECI frame (N, 3).
-            --config (dict): Orekit propagation configuration (Step, Start, End).
-            --config_0 (dict): Full STK_CONFIG dictionary for the propagator template.
-            --damping_lambda (float): Initial damping parameter for the Levenberg-Marquardt algorithm.
-            --max_loops (int): Maximum number of iterations allowed before forcing termination.
-            --versor_arr_meas (ndarray): Measured relative directions (versors) in ECI frame (N, 3), used for LSQR optimization.
-            --epsilon (float, optional): Relative tolerance threshold for the Levenberg-Marquardt convergence check (default 1e-10).
-            --w_i (vector[]): Weight vector for the 3 spatial components. Defaults to [1.0, 1.0, 1.0].
-            --deltaamtchg (float, optional): Minimum absolute perturbation step for the Jacobian finite differences (default 1e-7).
-            --percentchg (float, optional): Relative perturbation percentage for the Jacobian finite differences (default 1e-6).
-            --fov: FOV semi-aperture to filter out-of-sight measurements, in degrees (if == 0 filter not applied - default)
-            --alphamax: Maximum sun phase angle to see the target, in degrees (if == 0 filter not applied - default)   
-            --m_v_threshold: Maximum magnitude of reflected light to see the target, in log scale (if == 0 filter not applied - default) 
+            --df_servicer (DataFrame): Known, fixed state of the servicer in ECI frame (N, 6).              [m, m/s] 
+            --versor_arr_meas (ndarray): Measured relative directions (versors) in ECI frame (N, 3).        [-]
+            --config (dict): Orekit propagation configuration (Step, Start, End).                           [-]
+            --config_0 (dict): Full STK_CONFIG dictionary for the propagator template.                      [-]
+            --damping_lambda (float): Initial damping parameter for the Levenberg-Marquardt algorithm.      [-]
+            --max_loops (int): Maximum number of iterations allowed before forcing termination.             [-]
+            --epsilon (float, optional): Relative tolerance threshold for the Levenberg-Marquardt convergence check (default 1e-10).        [-]
+            --w_i (vector[]): Weight vector for the 3 spatial components. Defaults to [1.0, 1.0, 1.0].                                      [-]
+            --deltaamtchg (float, optional): Minimum absolute perturbation step   for the Jacobian finite differences (default 1e-7).       [-]
+            --percentchg (float, optional): Relative perturbation percentage for the Jacobian finite differences (default 1e-6).            [%]
+            --fov: FOV semi-aperture to filter out-of-sight measurements, in degrees (if == 0 filter not applied - default)                     [deg]
+            --fov_offset: Pointing direction. if positive pointing forward, otherwise pointin backward (if <=1e-6 or not specified: zenithal)   [deg]
+            --alphamax: Maximum sun phase angle to see the target, in degrees (if == 0 filter not applied - default)                            [deg]
+            --m_v_threshold: Maximum magnitude of reflected light to see the target, in log scale (if == 0 filter not applied - default)        [-]
                                                                                 (suggested value 13, see the function for more details)      
         Output:
-            None
+            Results and final plots saved in the folder  " .\tests\test_PropTime_StepLenght_MagnitudeValue_StartingDate "
         """
 
         self.df_client = df_client                      # otherwise we can propagate it inside from e_initial
@@ -52,6 +54,7 @@ class Optimizer:
         # Initialize the mask and filters values
         self.mask = np.ones(len(self.versor_arr_meas), dtype=bool) 
         self.FOV = fov
+        self.FOVoffset = fov_offset
         self.alphaMax = alphamax
         self.m_v_threshold = m_v_threshold
         self.phi = 0
@@ -106,13 +109,38 @@ class Optimizer:
         if  self.FOV == 0:
             return
         
+        print (f"--> Entering in FOV filter with an aperture of {self.FOV} and a offset equal to {self.FOVoffset}\n")
         # Normalized position vectors
         normal_versors = self.df_servicer[["randv_mks_0", "randv_mks_1", "randv_mks_2"]].values.astype(float)
         norms = np.linalg.norm(normal_versors, axis=1, keepdims=True)
         normal_versors = normal_versors / norms
 
+        if self.FOVoffset <= 1e-6:       # Zenithal pointing
+            pointing_versors = normal_versors
+        else:
+            # Extract servicer's position and velocity vectors to find the orbital plane
+            pos = self.df_servicer.iloc[:, 0:3].values
+            vel = self.df_servicer.iloc[:, 3:6].values
+            
+            # Compute the cross-track direction (perpendicular to the orbital plane)
+            # angular momentum vector = r x v
+            cross_track = np.cross(pos, vel)
+            cross_norms = np.linalg.norm(cross_track, axis=1, keepdims=True)
+            cross_versors = cross_track / cross_norms
+            
+            # Compute the true along-track direction (the exact "forward" direction)
+            along_track = np.cross(cross_versors, normal_versors)
+            
+            # Apply the rotation in the orbital plane
+            # A positive FOVoffset rotates the pointing vector towards the along_track vector
+            pointing_versors = (normal_versors * np.cos(np.radians(self.FOVoffset)) + 
+                                along_track * np.sin(np.radians(self.FOVoffset)))
+            
+            # Normalize just to be safe against floating-point drifts
+            pointing_versors = pointing_versors / np.linalg.norm(pointing_versors, axis=1, keepdims=True)
+
         # Compare with visibility condition
-        self.cos_angles = np.sum(normal_versors * self.versor_arr_meas, axis=1)
+        self.cos_angles = np.sum(pointing_versors * self.versor_arr_meas, axis=1)
         cos_lim = np.cos(np.radians(self.FOV))
         fov_mask = self.cos_angles >= cos_lim 
 
@@ -141,6 +169,7 @@ class Optimizer:
         if  self.alphaMax == 0:
             return
         
+        print (f"--> Entering in sun visibility filter with a maximum sun phase angle of {self.alphaMax}\n")
         # time vector
         times = Time(self.df_servicer.index)
 
@@ -194,7 +223,8 @@ class Optimizer:
 
         if self.m_v_threshold == 1e6:
             return
-
+        
+        print (f"--> Entering in detectability filter with a maximum detectable magnitude of {self.m_v_threshold}\n")
         # Time vector
         times = Time(self.df_servicer.index)
 
@@ -489,7 +519,7 @@ class Optimizer:
 
                 # If damping gets unreasonably high, we are stuck in a local minimum
                 if self.damping_lambda >= 1e9:
-                    print("   -> WARNING: Damping limit reached. Stopping optimization.")
+                    print("   !! WARNING: Damping limit reached. Stopping optimization.")
                     print("\nForcing the exit from the minimization loop ( step(t)=step(t-1) ).\n")
                     print("We're stucked!")                    
                     step_accepted = True # Force exit to prevent infinite loop
