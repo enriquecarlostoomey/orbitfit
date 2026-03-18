@@ -176,98 +176,106 @@ class Optimizer:
     def detectability_filter(self, sun_flux=1361.0):
         """
         Find the incoming light reaching the camera from the servicer and compare with threshold detectability value.
-        Formulas taken from (and simplified): 
-        "Observations and Modeling of GEO Satellites at Large Phase Angles", Rita L. Cognion, "Oceanit"
-        https://amostech.com/TechnicalPapers/2013/POSTER/COGNION.pdf
+        Formulas based on: "Observations and Modeling of GEO Satellites at Large Phase Angles", Rita L. Cognion (2013)
 
         Input:
-            None ()
+            sun_flux: Solar flux constant [W/m^2]
         Output:
-            self.mask: Mask of "good" values            
+            self.mask: Mask of "good" values based on visual magnitude threshold           
         """
 
         # VALUES FOR MAX MAGNITUDE:
         # from Luis Calvo "Validation of models employed in the Far-Range Image Generator Software"
         # considering an exposure time of 1s, 30|40 deg temperature:
-        # -No security factor: ~ 15.4|15.1 mag   -Security factor 10 ~ 13.3|13.0 mag    -Securyty factor 20 ~ 12.1|12.0 mag
-        # considering an exposure time of 0.1s, 30|40 deg temperasture:
-        # -No security factor: ~ 12.6|12.1 mag   -Security factor 10 ~ 10.6|10.6 mag    -Securyty factor 20 ~ 10|9.1 mag
-        # Inopur case: we don't need fast imaging, we can assume 1s exposure, security factor 10 --> magMax = 13
+        # -No security factor: ~ 15.4|15.1 mag   -Security factor 10 ~ 13.3|13.0 mag    -Security factor 20 ~ 12.1|12.0 mag
+        # considering an exposure time of 0.1s, 30|40 deg temperature:
+        # -No security factor: ~ 12.6|12.1 mag   -Security factor 10 ~ 10.6|10.6 mag    -Security factor 20 ~ 10|9.1 mag
+        # In our case: we don't need fast imaging, we can assume 1s exposure, security factor 10 --> magMax = 13
 
-        if  self.m_v_threshold == 1e6:
+        if self.m_v_threshold == 1e6:
             return
 
-        # time vector
+        # Time vector
         times = Time(self.df_servicer.index)
 
         # Extract the area from the nested dictionary
         target_area = self.prop_config_0['SpaceObject']['Area'] 
-        # Convert cross-sectional area to equivalent radius r (according to the model)
+        
+        # Convert cross-sectional area to equivalent radius r 
         r = np.sqrt(target_area / np.pi)
+        
+        # Compute relative distance vector and magnitude (d)
         diff = self.df_client_real.iloc[:, :3].values - self.df_servicer.iloc[:, :3].values
-        d = np.linalg.norm(diff, axis=1)# Shape (N, )
-        self.d =d
+        d = np.linalg.norm(diff, axis=1)
+        self.d = d
 
-        #sun-earth position        
+        # Sun-Earth position        
         sun_coords = get_sun(times)
         sun_x = sun_coords.cartesian.x.to_value('m')
         sun_y = sun_coords.cartesian.y.to_value('m')
         sun_z = sun_coords.cartesian.z.to_value('m')
         
-        # invert sign to find incoming light direction
+        # Invert sign to find incoming light direction
         light_arr = np.column_stack((-sun_x, -sun_y, -sun_z))
         norms = np.linalg.norm(light_arr, axis=1, keepdims=True)
         light_versors = light_arr / norms
 
-        # compute the angle between sun-servicer-client (dot product for each line)
+        # Compute the angle between sun-servicer-client (dot product for each line)
         dot_prod = np.sum(light_versors * self.versor_arr_meas, axis=1)
-        phi = np.arccos(np.clip(dot_prod, -1.0, 1.0))       # according to gemini, to avoid "floating point errors, e.g. cos=1.0000001"
+        
+        # Clip dot product to avoid floating point errors (e.g., cos=1.0000001)
+        phi = np.arccos(np.clip(dot_prod, -1.0, 1.0)) 
 
-        # Albedo computation using cosines and specific Cognion polynomials
-        cos_150 = np.cos(np.radians(150))
-        cos_100 = np.cos(np.radians(100))
-        cos_25  = np.cos(np.radians(25))
-
-        a_0 = np.zeros_like(dot_prod)
+        # -----------------------------------------------------------------
+        # COGNION (2013) EMPIRICAL PHASE FUNCTION CALCULATION
+        # -----------------------------------------------------------------
+        # The polynomials directly model the brightness variation. 
+        # We clip the angle for the polynomial input between 25 and 150 deg 
+        # to ensure the empirical model behaves correctly at the boundaries.
+        
+        phi_calc = np.clip(phi, np.radians(25), np.radians(150))
+        a_0 = np.zeros_like(phi)
 
         # Case 1: phi < 100 deg (First Polynomial)
-        mask_poly1 = (dot_prod > cos_100)
-        dot_prod_clip1 = np.clip(dot_prod[mask_poly1], None, cos_25)        # handle the <25 deg case as =25 deg
-        phi1 = np.arccos(dot_prod_clip1)
-        a_0[mask_poly1] = (3.1765 * phi1**6 - 22.0968 * phi1**5 + 
-                           62.182 * phi1**4 - 90.0993 * phi1**3 + 
-                           70.3031 * phi1**2 - 27.9227 * phi1 + 4.7373)
+        mask_poly1 = (phi_calc < np.radians(100))
+        p1 = phi_calc[mask_poly1]
+        a_0[mask_poly1] = (3.1765 * p1**6 - 22.0968 * p1**5 + 
+                           62.182 * p1**4 - 90.0993 * p1**3 + 
+                           70.3031 * p1**2 - 27.9227 * p1 + 4.7373)
 
-        # Case 2: 100 <= phi < 150 deg (Second Polynomial)
-        mask_poly2 = (dot_prod <= cos_100) & (dot_prod > cos_150)
-        phi2 = np.arccos(dot_prod[mask_poly2])
-        a_0[mask_poly2] = (-1.8016 * phi2**3 + 7.4251 * phi2**2 - 10.158 * phi2 + 4.634)
+        # Case 2: 100 <= phi <= 150 deg (Second Polynomial)
+        mask_poly2 = (phi_calc >= np.radians(100))
+        p2 = phi_calc[mask_poly2]
+        a_0[mask_poly2] = (0.510905 * p2**3 - 2.72607 * p2**2 + 4.96646 * p2 - 3.02085)
 
-        # Case 3: phi >= 150 deg (a_0 remains 0)
+        # Case 3: phi > 150 deg 
+        # Forward scattering region / Eclipse: force albedo term to 0
+        a_0[phi > np.radians(150)] = 0.0
 
+        # Reflected flux (Lambertian phase function removed, Cognion polynomial already accounts for it)
+        f_diff = (2/3) * a_0 * (r**2 / (np.pi * d**2))
 
-        # reflected flux
-        phase_function = np.sin(phi) + (np.pi - phi) * np.cos(phi)
-        f_diff = (2/3) * a_0 * (r**2 / (np.pi * d**2)) * phase_function
-
-        self.m_v = np.full_like(phi, self.m_v_threshold+1)        # initialized as all false
-        valid = np.array(f_diff > 0).flatten()
+        # Initialize apparent magnitude with a very high value (30.0 = completely dark/invisible)
+        self.m_v = np.full_like(phi, 30.0) 
+        
+        # Calculate valid magnitudes (where flux is strictly positive)
+        valid = (f_diff > 0)
         self.m_v[valid] = -26.74 - 2.5 * np.log10(f_diff[valid] / sun_flux)
 
         self.phi = phi
         
-        # 5. Detectability Mask
+        # Detectability Mask: Keep only measurements brighter than the threshold
         det_mask = self.m_v < self.m_v_threshold
 
-        # mask update
+        # Update global mask
         self.mask = self.mask & det_mask
         
         if np.sum(self.mask) == 0:
-            print ("All the points are filtered out. Exiting the simulation.")
+            print("All the points are filtered out. Exiting the simulation.")
             self.max_loops = 0          # Force the exit from lsqr loop
             return None
         else:
-            print(f"valid points after sun direction filter: {np.sum(self.mask)} over {len(self.mask)}")
+            print(f"Valid points after sun direction filter: {np.sum(self.mask)} over {len(self.mask)}")
 
 
     def applyMask(self, df):
@@ -585,8 +593,6 @@ class Optimizer:
 
         # exportinmg the covariance matrix P to see the predicted quality of the final fit
         inv_awat = np.linalg.inv(awat)
-        n_obs = len(self.versor_arr_meas) * 3 # 3 componenti per ogni versore
-        dof = n_obs - 6 # Gradi di libertà
         sigma_squared = (sigmanew**2)
 
         # compute adn save covariance and std of the 6 unknowns (sqrt(variance))

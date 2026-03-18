@@ -1,2 +1,4 @@
 /output
 *.pyc
+/BATCH_MIO/Tests
+/tests
