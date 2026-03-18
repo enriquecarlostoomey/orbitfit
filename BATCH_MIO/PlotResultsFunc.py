@@ -9,7 +9,7 @@ from astropy.time import Time
 class PLOTRESULTS:
 
     def __init__(self, versor_arr_real, versor_arr_real_filt, versor_arr_meas, versor_arr_comp, df_client_real_unfilt, df_client_real, 
-                 df_client_init, df_state_final, df_servicer, b_matrix = None, n_loops = 0, rMax = 4e7):
+                 df_client_init, df_state_final, df_servicer, b_matrix = None, n_loops = 0, rMax = 4e7, save_dir=None):
         """
         Class to plotresults for both residuals and final fit fior the Angle Based Least Square Optimization (AngularBatchEst)
 
@@ -40,6 +40,7 @@ class PLOTRESULTS:
         self.rMax = rMax
         self.df_servicer = df_servicer
         self.df_residuals_matrix = b_matrix
+        self.save_dir = save_dir
 
     def plotResiduals(self):
 
@@ -122,6 +123,9 @@ class PLOTRESULTS:
         ax_res.legend()
 
         plt.tight_layout()
+        if self.save_dir:
+            import os
+            fig.savefig(os.path.join(self.save_dir, "residualsplot.png"), dpi=200)
         plt.show() 
 
 
@@ -235,6 +239,9 @@ class PLOTRESULTS:
         ax.set_yscale('log')
 
         plt.tight_layout()
+        if self.save_dir:
+            import os
+            fig.savefig(os.path.join(self.save_dir, "residuals_history.png"), dpi=200)
         plt.show(block=False)
 
        
@@ -311,6 +318,9 @@ class PLOTRESULTS:
         ax.set_ylim([lim_min, lim_max])
         ax.set_zlim([lim_min, lim_max])
         ax.set_box_aspect([1, 1, 1])
+        if self.save_dir:
+            import os
+            fig.savefig(os.path.join(self.save_dir, "Original_VS_Initial.png"), dpi=200)
 
         # 3D plot of original client orbit self.df_client_ECI_m and the final, fitted self.df_state_final:
 
@@ -379,6 +389,8 @@ class PLOTRESULTS:
         ax.set_ylim([lim_min, lim_max])
         ax.set_zlim([lim_min, lim_max])
         ax.set_box_aspect([1, 1, 1])
+        if self.save_dir:
+            fig.savefig(os.path.join(self.save_dir, "Original_VS_Final.png"), dpi=200)
 
 
         # compute and plot: 1) difference between original and initial guessed orbit\\ 2) difference between original and final fitted orbit\\ 3) difference between initial guess and final fitted orbit
@@ -422,7 +434,9 @@ class PLOTRESULTS:
         ax[1].set_yscale('log')
 
         plt.tight_layout()
-        plt.show()
+        plt.tight_layout()
+        if self.save_dir:
+            fig.savefig(os.path.join(self.save_dir, "finalresults.png"), dpi=200)
 
         print()
         print("ratio between final and original error (hopefully <<1):")
@@ -440,8 +454,20 @@ class PLOTRESULTS:
         if self.n_loops!= 0:
             print("Iterations:")
             print({self.n_loops})
+        # save the outputs in the txt file:
+        note_path = os.path.join(self.save_dir, "note.txt")
+        with open(note_path, 'a') as f:
+            f.write("\nratio between final and original error (hopefully <<1):\n")
+            f.write(str(np.linalg.norm(err_pos_orig_final)/np.linalg.norm(err_pos_orig_init)) + "\n")
+            f.write("\nnorm of error between original and initial guess:\n")
+            f.write(str(np.linalg.norm(err_pos_orig_init)) + "\n")
+            f.write("\nnorm of error between original and final guess:\n")
+            f.write(str(np.linalg.norm(err_pos_orig_final)) + "\n")
+            f.write("\nMax error between final and real positions:\n")
+            f.write(str(np.max(err_pos_orig_final)) + "\n")
+        plt.show()
 
-def plot_detectability(phi, d, m_v, m_v_threshold):
+def plot_detectability(phi, d, m_v, m_v_threshold, save_dir=None):
     """
     Plots the evolution of Phase Angle, Distance, and Magnitude.
     Input:
@@ -482,4 +508,7 @@ def plot_detectability(phi, d, m_v, m_v_threshold):
     ax3.grid(True, linestyle=':', alpha=0.6)
 
     plt.tight_layout()
+    if save_dir:
+        import os
+        fig.savefig(os.path.join(save_dir, "sunFilter.png"), dpi=200)
     plt.show()

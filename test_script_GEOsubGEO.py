@@ -5,6 +5,7 @@ import datetime
 import copy
 import pandas as pd
 import numpy as np
+import os
 import BATCH_MIO.AngularBatchEst as ang
 from BATCH_MIO.PlotResultsFunc import PLOTRESULTS, plot_detectability
 
@@ -19,25 +20,25 @@ from BATCH_MIO.PlotResultsFunc import PLOTRESULTS, plot_detectability
 # the perturbation on initial guess has been implemented in the cartesian state vector
 # DEFINE PARAMETERS FOR THE SIMULATION:
 
-propstep = 30               # time step for propagation [s]
-duration = 22             # propagation time [h]
-MaxLoop = 45                # Max Loop in LS algorithm [-]
+propstep = 60               # time step for propagation [s]
+duration = 3                # propagation time [h]
+MaxLoop = 4                 # Max Loop in LS algorithm [-]
 noise_std_dev_pos = 1000    # Standard deviation of the client position noise for the initial guess perturbation [m]
 noise_std_dev_vel = 10      # Standard deviation of the client velocity noise for the initial guess perturbation [m/s]
 sigma_rad = 1.7453e-05      # Angular error for the measured versors (bot azimuth and elevation)(small) [rad]
 Epsilon = 1e-9              # condition to exit the LS loop [-]
 FOV = 0                     # FOV semi-aperture to filter out-of-sight measurements [deg] - if 0 the filter is not activated
 alphaMax = 0                # Maximum sun phase angle to see the target [deg] - if 0 the filter is not activated
-magnitudeMax = 13          # 13 suggested (see comment in the related function) - if 1e6 the filter is not activated         
+magnitudeMax = 13           # 13 suggested (see comment in the related function) - if 1e6 the filter is not activated         
 
 # position and velocity of the client in ECI frame (in meters and m/s) (GEO orbit)
 epoch = dateutil.parser.parse("2021-03-09T09:40:14.991000Z")
-oe_client_ECI = np.array([42164.140, 1e-6, 1e-6, 1e-6, 1e-6, 0.39])
+oe_client_ECI = np.array([42164.140, 1e-6, 1e-6, 1e-6, 1e-6, 0.45])
 pos, vel=  np.array(oe2rv(*oe_client_ECI))
 posvel_client_ECI_m = np.concatenate([pos, vel]) * 1e3 
 
 # The servicer is in sub-GEO (-300km radius)
-oe_servicer_ECI = np.array([42164.140-300, 1e-6, 1e-6, 1e-6, 1e-6, 0.39-np.deg2rad(1.8)])                         # GEO oe for servicer [km]
+oe_servicer_ECI = np.array([42164.140-300, 1e-6, 1e-6, 1e-6, 1e-6, 0.45-np.deg2rad(1.8)])                         # GEO oe for servicer [km]
 pos, vel=  np.array(oe2rv(*oe_servicer_ECI))
 posvel_servicer_ECI_m = np.concatenate([pos, vel]) * 1e3                                          # GEO coordinates for servicer [m, m/s]
 
@@ -184,53 +185,80 @@ print(f"End time: {end_wall} ")
 print(f"Total processing time: {execution_time} [hh:mm:ss]")
 print()
 
+import os
+
+# ==============================================================================
+# --- OUTPUT FOLDER CREATION                                                 ---
+# ==============================================================================
+# Creating the folder with dynamic name
+time_suffix = start_wall.strftime("%H%M%S")
+folder_name = f"test_{duration}h_{propstep}sStep_{magnitudeMax}maxMag_{time_suffix}"
+folder_name = os.path.join("tests", folder_name)
+
+# additional folder if the previous one was already existing
+os.makedirs(folder_name, exist_ok=True)
+
+# ==============================================================================
+# --- WRITE NOTE.TXT                                                         ---
+# ==============================================================================
+note_path = os.path.join(folder_name, "note.txt")
+
+with open(note_path, 'w') as f:
+    f.write(f"Start time: {start_wall}\n")
+    f.write(f"End time: {end_wall}\n")
+    f.write(f"Total processing time: {execution_time} [hh:mm:ss]\n\n")
+    
+    f.write("\n--- PARAMETERS ---\n")
+    f.write(f"propstep = {propstep} [s]\n")
+    f.write(f"duration = {duration} [h]\n")
+    f.write(f"MaxLoop = {MaxLoop}\n")
+    f.write(f"noise_std_dev_pos = {noise_std_dev_pos} [m]\n")
+    f.write(f"noise_std_dev_vel = {noise_std_dev_vel} [m/s]\n")
+    f.write(f"Epsilon = {Epsilon}\n")
+    f.write(f"FOV = {FOV} [deg]\n")
+    f.write(f"alphaMax = {alphaMax} [deg]\n")
+    f.write(f"magnitudeMax = {magnitudeMax}\n\n")
+
+    f.write("\n--- INITIAL ORBITAL ELEMENTS (Guess & True) ---\n")
+    f.write(f"epoch = {epoch}\n")
+    # Stampiamo gli array convertendoli in liste per renderli leggibili
+    f.write(f"oe_client_ECI = {oe_client_ECI.tolist()} [a, e, i, Omega, omega, M]\n")
+    f.write(f"oe_servicer_ECI = {oe_servicer_ECI.tolist()} [a, e, i, Omega, omega, M]\n\n")
+
+    f.write("\n--- RESULTS ---\n")
+    f.write(f"Iterations (Loops): {n_loops}\n")
+    
+    # Salva la matrice di covarianza formattata
+    if hasattr(estimator, 'covariance_matrix'):
+        f.write("\n\nFinal Covariance Matrix:\n")
+        for row in estimator.covariance_matrix:
+            f.write(" ".join(f"{val:12.4e}" for val in row) + "\n")
+            
+        f.write("\nFinal ST deviation on unknowns [af, ag, a, L, pe, qe]:\n")
+        f.write(" ".join(f"{val:12.4e}" for val in np.sqrt(np.diag(estimator.covariance_matrix))) + "\n")
 
 
-#    ########################################
-#    #                                      #
-#    #            Plot results              #
-#    #                                      #
-#    ########################################
-
-np.set_printoptions(linewidth=150, precision=8, suppress=False) # correct display of matrix
-
-print("\n\nFinal Covariance Matrix:\n")
-print({estimator.covariance_matrix.shape})
-print (estimator.covariance_matrix)
-
-print("\n\nFinal ST deviation on unknowns:\n")
-print (estimator.param_errors)
-
-
-# apply the mask to the real vector (if valid)
-
-if n_loops >1:
+# ==============================================================================
+# --- PLOTTING AND SAVING IMAGES                                             ---
+# ==============================================================================
+if n_loops > 1:
     versor_arr_real_filt = estimator.applyMask(versor_arr_real)
     versor_arr_meas_filt = estimator.applyMask(versor_arr_meas)
     df_client_ECI_m_filt = estimator.applyMask(df_client_ECI_m)
     df_client_ECI_fit_filt = estimator.applyMask(df_client_ECI_fit)
 
-    Plot = PLOTRESULTS(versor_arr_real, versor_arr_real_filt, versor_arr_meas_filt, estimator.versor_arr_comp, df_client_ECI_m, df_client_ECI_m_filt, 
-                       df_client_ECI_fit_filt, df_state_final, df_servicer_ECI_m, estimator.b_history, n_loops)
+    # Passiamo folder_name alla classe PLOTRESULTS
+    Plot = PLOTRESULTS(versor_arr_real, versor_arr_real_filt, versor_arr_meas_filt, 
+                       estimator.versor_arr_comp, df_client_ECI_m, df_client_ECI_m_filt, 
+                       df_client_ECI_fit_filt, df_state_final, df_servicer_ECI_m, 
+                       estimator.b_history, n_loops, save_dir=folder_name)
+    
     Plot.plotResiduals()
     Plot.plotResidualsEvolution()
-    Plot.plotFinalFit()
+    Plot.plotFinalFit() # I risultati del fit verranno stampati a terminale e salvati
     
-if magnitudeMax != 1e6:
-    print("\n\nSimulated magnitude:\n")
-    print({estimator.m_v.shape})
-    print (estimator.m_v)
+    if estimator.detectability_filter != 1e6:
+        plot_detectability(estimator.phi, estimator.d, estimator.m_v, estimator.m_v_threshold, save_dir=folder_name)
 
-    print("\n\nIncoming light angle [deg]:\n")
-    print({estimator.phi.shape})
-    print (np.rad2deg(estimator.phi))
-
-    print("\n\nDistance [m]:\n")
-    print({estimator.d.shape})
-    print (estimator.d)
-
-    print("\n\nBoolean logic mask\n")
-    print(estimator.mask)
-
-    plot_detectability(estimator.phi, estimator.d, estimator.m_v, estimator.m_v_threshold)
+    print("\n\nresults saved!")
 
