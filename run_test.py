@@ -14,18 +14,18 @@ def run_orbit_estimation(
     propstep=60,              
     duration=2,           
     MaxLoop=3,                
-    noise_std_dev_pos=100,     
+    noise_std_dev_pos=1000,     
     noise_std_dev_vel=10,
     sigma_rad = 1.7453e-05,      
-    Epsilon=1e-6,              
+    Epsilon=1e-10,              
     FOV=0,
-    FOV_offset = 0                    
+    FOV_offset = 0,                    
     alphaMax = 0,               
     magnitudeMax=1e6,
     epoch_str="2021-03-09T09:40:14.991000Z",
     oe_client_ECI=np.array([42164.140, 1e-6, 1e-6, 1e-6, 1e-6, 0.2]),
     oe_servicer_ECI=np.array([42164.140-300, 1e-6, 1e-6, 1e-6, 1e-6, 0.2-np.deg2rad(1.8)]),
-    comments = "\nNothing new?\n",
+    comments = "\nSame as before, but increased epsilon (more precision required)\n",
     seed = 100
     ):
     """
@@ -201,7 +201,7 @@ def run_orbit_estimation(
         max_loops=MaxLoop,                      # (Opzionale) Numero massimo di iterazioni
         epsilon=Epsilon,
         fov = FOV,
-        fov_offset= FOV_offset
+        fov_offset= FOV_offset,
         alphamax = alphaMax,
         m_v_threshold = magnitudeMax           
         )
@@ -284,6 +284,8 @@ def run_orbit_estimation(
             f.write(f"Valid measurements after filtering: {valid_points}\n")
             f.write(f"Iterations (Loops): {n_loops}\n")
             f.write(f"Optimization exit reason: {exit_reason}\n")
+            f.write(f"Original OE elements: {oe_client_ECI}  [a e i RAAN w v]")
+            f.write(f"final, interpolated OE elements: {ee2oe(*ee_final)}  [a e i RAAN w v]")            
             
             # Salva la matrice di covarianza formattata
             if hasattr(estimator, 'covariance_matrix'):
@@ -314,11 +316,13 @@ def run_orbit_estimation(
         Plot.plotResidualsEvolution()
         Plot.plotFinalFit() # I risultati del fit verranno stampati a terminale e salvati
         
-        if estimator.detectability_filter != 1e6:
+        if estimator.m_v_threshold != 1e6:
             plot_detectability(estimator.phi, estimator.d, estimator.m_v, estimator.m_v_threshold, save_dir=folder_name)
 
         print("\n\nresults saved!\n")
 
+
+########################################################################################################################
 
 if __name__ == "__main__":
     # Initialize the argument parser
@@ -330,11 +334,11 @@ if __name__ == "__main__":
     parser.add_argument("--MaxLoop", type=int, default=3, help="Maximum number of LS iterations")
     
     # Using dest to match your function's parameter names internally
-    parser.add_argument("--noise_pos", type=float, default=100.0, dest="noise_std_dev_pos", help="Initial guess position error [m]")
+    parser.add_argument("--noise_pos", type=float, default=1000.0, dest="noise_std_dev_pos", help="Initial guess position error [m]")
     parser.add_argument("--noise_vel", type=float, default=10.0, dest="noise_std_dev_vel", help="Initial guess velocity error [m/s]")
     
     parser.add_argument("--sigma_rad", type=float, default=1.7453e-05, help="Angular measurement noise [rad]")
-    parser.add_argument("--Epsilon", type=float, default=1e-6, help="Exit condition threshold")
+    parser.add_argument("--Epsilon", type=float, default=1e-8, help="Exit condition threshold")
     parser.add_argument("--FOV", type=float, default=0.0, help="FOV semi-aperture [deg]")
     parser.add_argument("--alphaMax", type=float, default=0.0, help="Maximum sun phase angle [deg]")
     parser.add_argument("--magnitudeMax", type=float, default=1e6, help="Maximum visual magnitude threshold")

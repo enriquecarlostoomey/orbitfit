@@ -36,7 +36,7 @@ class Optimizer:
             --m_v_threshold: Maximum magnitude of reflected light to see the target, in log scale (if == 0 filter not applied - default)        [-]
                                                                                 (suggested value 13, see the function for more details)      
         Output:
-            Results and final plots saved in the folder  " .\tests\test_PropTime_StepLenght_MagnitudeValue_StartingDate "
+            Results and final plots saved in the folder  ".\tests\test_PropTime_StepLenght_MagnitudeValue_StartingDate"
         """
 
         self.df_client = df_client                      # otherwise we can propagate it inside from e_initial
