@@ -11,16 +11,16 @@ class Optimizer:
     # fov_offset never insert
     # We could add other parameters as input instead of fixed
 
-    def __init__(self, df_client, df_client_real, df_servicer, versor_arr_meas, config, config_0=None, 
+    def __init__(self, df_initial_guess, df_client_groundTruth, df_servicer, versor_arr_meas, config, config_0=None, 
                  damping_lambda=0.001, max_loops=30, epsilon=1e-9, w_i=None, deltaamtchg=1e-7, percentchg=1e-6, fov=0, fov_offset = 0, alphamax=0, m_v_threshold=1e6):
         """
         Initializes the Optimizer class with the initial state guess, reference datasets, 
         measurements, propagation configurations, and Levenberg-Marquardt solver parameters.
 
         Input:
-            --df_client (DataFrame): Initial propagated state of the client in ECI frame from unflitered initial guess [m, m/s] (N, 6).
-            --df_client_real (DataFrame): 
-            --df_servicer (DataFrame): Known, fixed state of the servicer in ECI frame (N, 6).              [m, m/s] 
+            --df_initial_guess (DataFrame): Initial propagated state of the client in ECI frame from unflitered initial guess [m, m/s] (N, 6).
+            --df_client_groundTruth (DataFrame): 
+            --df_servicer (DataFrame): Known, Ground Truth, fixed state of the servicer in ECI frame (N, 6).              [m, m/s] 
             --versor_arr_meas (ndarray): Measured relative directions (versors) in ECI frame (N, 3).        [-]
             --config (dict): Orekit propagation configuration (Step, Start, End).                           [-]
             --config_0 (dict): Full STK_CONFIG dictionary for the propagator template.                      [-]
@@ -39,9 +39,9 @@ class Optimizer:
             Results and final plots saved in the folder  ".\tests\test_PropTime_StepLenght_MagnitudeValue_StartingDate"
         """
 
-        self.df_client = df_client                      # otherwise we can propagate it inside from e_initial
+        self.df_initial_guess = df_initial_guess                      # otherwise we can propagate it inside from e_initial
         self.df_servicer = df_servicer
-        self.df_client_real = df_client_real
+        self.df_client_groundTruth = df_client_groundTruth
         self.versor_arr_meas = versor_arr_meas
         self.propagation_config = config
         self.max_loops = max_loops
@@ -51,13 +51,15 @@ class Optimizer:
         self.percentchg = percentchg   
         self.b_history = []                             
 
-        # Initialize the mask and filters values
+        # Initialize the mask, filters and parameters
         self.mask = np.ones(len(self.versor_arr_meas), dtype=bool) 
         self.FOV = fov
         self.FOVoffset = fov_offset
         self.alphaMax = alphamax
         self.m_v_threshold = m_v_threshold
         self.phi = 0
+        self.errorFlag = False              # turn to True if some errors are encountered
+        self.exitReason = ""                # save the exit reason from the lsqr loop
 
         # weighting matrix initialization
         if w_i is None:
@@ -150,6 +152,7 @@ class Optimizer:
         if np.sum(self.mask) == 0:
             print ("All the points are filtered out. Exiting the simulation.")
             self.max_loops = 0          # Force the exit from lsqr loop
+            self.errorFlag = True
             return None
         else:
             print(f"valid points after FOV filter: {np.sum(self.mask)} over {len(self.mask)}")
@@ -193,6 +196,7 @@ class Optimizer:
         if np.sum(self.mask) == 0:
             print ("All the points are filtered out. Exiting the simulation.")
             self.max_loops = 0          # Force the exit from lsqr loop
+            self.errorFlag = True
             return None
         else:
             print(f"valid points after sun direction filter: {np.sum(self.mask)} over {len(self.mask)}")
@@ -235,7 +239,7 @@ class Optimizer:
         r = np.sqrt(target_area / np.pi)
         
         # Compute relative distance vector and magnitude (d)
-        diff = self.df_client_real.iloc[:, :3].values - self.df_servicer.iloc[:, :3].values
+        diff = self.df_client_groundTruth.iloc[:, :3].values - self.df_servicer.iloc[:, :3].values
         d = np.linalg.norm(diff, axis=1)
         self.d = d
 
@@ -303,6 +307,7 @@ class Optimizer:
         if np.sum(self.mask) == 0:
             print("All the points are filtered out. Exiting the simulation.")
             self.max_loops = 0          # Force the exit from lsqr loop
+            self.errorFlag = True
             return None
         else:
             print(f"Valid points after sun direction filter: {np.sum(self.mask)} over {len(self.mask)}")
@@ -521,7 +526,8 @@ class Optimizer:
                 if self.damping_lambda >= 1e9:
                     print("   !! WARNING: Damping limit reached. Stopping optimization.")
                     print("\nForcing the exit from the minimization loop ( step(t)=step(t-1) ).\n")
-                    print("We're stucked!")                    
+                    print("We're stucked!")
+                    self.exitReason = "Damping limit reached (can't minimize residuals anymore)"                    
                     step_accepted = True # Force exit to prevent infinite loop
                     df_state_trial = df_step_old
                     versor_arr_comp = versor_arr_comp_old
@@ -544,10 +550,10 @@ class Optimizer:
             W (ndarray): Expanded weight matrix for normal equations contraction (N, 3).
             versor_arr_init (ndarray): Initial computed versors from the first guess (N, 3).            
         Output:
-            df_step (DataFrame): Final optimized propagated state of the client (N, 6).
-            ee_step (array): Final optimized equinoctial elements (6,).
+            df_step (DataFrame): Final optimized propagated state of the client - Ground Segment (N, 6).
+            ee_step (array): Final optimized equinoctial elements - Ground Segment (6,).
             loop (int): Total number of iterations performed.
-        """
+        """ 
 
         # We are setting the LS algortihm:
         # dx = (A' W A)^(-1) A' b
@@ -564,7 +570,7 @@ class Optimizer:
         sigmaold = 20000.0
         sigmaold2 = 30000.0
         ee_step = self.ee_initial
-        df_step = self.df_client
+        df_step = self.df_client_groundTruth
         self.prop_config_0["Propagation"] = self.propagation_config
         self.prop_config_loop = copy.deepcopy(self.prop_config_0)
         self.prop_config_trial = copy.deepcopy(self.prop_config_0)
@@ -572,7 +578,7 @@ class Optimizer:
         # Compute initial error on versors
         versor_cost = np.linalg.norm(versor_arr_comp - self.versor_arr_meas, axis=1)
         print("")
-        print(f"Initial absolut error on versors : {np.sum(versor_cost)}")
+        print(f"Initial total absolut error on versors : {np.sum(versor_cost)}")
         print("")
         # LOOP: run till convergency is reached
 
@@ -611,15 +617,19 @@ class Optimizer:
         print("\n--- Optimization Terminated ---")
         if not (abs((sigmanew - sigmaold) / sigmaold) >= self.epsilon):
             print(f"Termination: Convergence reached (Relative change in sigma {abs((sigmanew - sigmaold) / sigmaold):.2e} < epsilon)")
+            self.exitReason = "Convergence reached (Relative change in sigma < epsilon)"
         
         if not (loop < self.max_loops):
             print(f"Termination: Maximum number of iterations reached (loop = {loop})")
+            self.exitReason = "Maximum number of iterations reached"
         
         if not (sigmanew >= self.epsilon):
             print(f"Termination: Absolute error sigma is below threshold (sigmanew = {sigmanew:.2e})")
+            self.exitReason = "Absolute error sigma is below threshold"
             
-        if (sigmanew > sigmaold) and (sigmaold > sigmaold2) and (sigmanew > 500000.0):
+        if (sigmanew > sigmaold) and (sigmaold > sigmaold2) and (sigmanew > 500000.0) and not self.exitReason:
             print("Termination: Divergence detected (Sigma has increased for two consecutive steps and exceeds safety limit)")
+            self.exitReason = "Divergence detected (Sigma has increased for two consecutive steps and exceeds safety limit)"
 
         # exportinmg the covariance matrix P to see the predicted quality of the final fit
         inv_awat = np.linalg.inv(awat)
@@ -643,7 +653,7 @@ class Optimizer:
         Input:
             None (class must be correctly initiaized).            
         Output:
-            df_optimized (DataFrame): Final optimized state of the client (N, 6).
+            df_client_groundSegment (DataFrame): Final optimized state of the client (N, 6).
             ee_final (array): Final optimized equinoctial elements (6,).
             loop (int): Total number of iterations it took to converge (or max out).
         """
@@ -659,30 +669,31 @@ class Optimizer:
             self.detectability_filter()
         # Check if mask is empty
         if np.sum(self.mask) == 0:
+            self.errorFlag = True
             return 0, 0, 0      
         
-        self.df_client = self.applyMask(self.df_client)
+        self.df_initial_guess = self.applyMask(self.df_initial_guess)
         self.df_servicer = self.applyMask(self.df_servicer)
         self.versor_arr_meas = self.applyMask(self.versor_arr_meas)
         self.n_measurements = len(self.versor_arr_meas)
 
-        self.oe_initial = rv2oe(self.df_client.iloc[0, 0:3].values * 1e-3, self.df_client.iloc[0, 3:6].values * 1e-3)
+        self.oe_initial = rv2oe(self.df_initial_guess.iloc[0, 0:3].values * 1e-3, self.df_initial_guess.iloc[0, 3:6].values * 1e-3)
         self.ee_initial = np.array(oe2ee(*self.oe_initial), dtype=float)
 
         # Find initial relative direction (from initial guess orbit propagation)
-        versor_arr_init = self.find_relative(self.df_client)
+        versor_arr_init = self.find_relative(self.df_initial_guess)
 
         # Initialize the residual wrt the measured directions
-        b = self.versor_arr_meas - versor_arr_init      # residual vector (measured - computed versor) 
+        b = self.versor_arr_meas - versor_arr_init                  # initial residual vector (measured - computed versor) 
         self.b_history.append(pd.DataFrame(b, columns=[f'Res_X_it{0}', f'Res_Y_it{0}', f'Res_Z_it{0}']))
 
         # weight matrix (3N x 3N , diag)
-        self.W = np.tile(self.w_i, (self.n_measurements,1))       # shape (N, 3)
+        self.W = np.tile(self.w_i, (self.n_measurements,1))         # shape (N, 3)
     
         # Call the loop
-        df_optimized, ee_final, loop = self.lsqr (b, versor_arr_init)
+        df_client_groundSegment, ee_final, loop = self.lsqr (b, versor_arr_init)
 
 
         self.b_history = pd.concat(self.b_history, axis=1)
 
-        return df_optimized, ee_final, loop
+        return df_client_groundSegment, ee_final, loop

@@ -8,39 +8,43 @@ from astropy.time import Time
 
 class PLOTRESULTS:
 
-    def __init__(self, versor_arr_real, versor_arr_real_filt, versor_arr_meas, versor_arr_comp, df_client_real_unfilt, df_client_real, 
-                 df_client_init, df_state_final, df_servicer, b_matrix = None, n_loops = 0, rMax = 4e7, save_dir=None):
+    def __init__(self, versor_arr_groundTruth_unfilt, versor_arr_groundTruth, versor_arr_meas, versor_arr_comp, df_client_groundTruth_unfilt, df_client_groundTruth, 
+                 df_client_initialGuess, df_state_groundSegment, df_servicer, b_matrix = None, n_loops = 0, rMax = 4e7, save_dir=None, Block = False):
         """
         Class to plotresults for both residuals and final fit fior the Angle Based Least Square Optimization (AngularBatchEst)
 
         Inputs: 
-            index: List of all dates from propagation (format yyyy-mm-ddThh:mm:ss.ss   es: 2021-03-09T16:08:14.991)
-            versor_arr_real: real (reference) versor from unperturbed unfiltered simulated data
-            versor_arr_rejected: rejected values from the filters (FOV, sun) 
+            versor_arr_groundTruth_unfilt: groundTruth (reference) versor from unperturbed unfiltered simulated data
+            versor_arr_groundTruth: point taken into account for the optimization after filtering. 
             versor_arr_meas: measured (simulated, perturbed) versor utilised for the LS optimization
             versor_arr_comp; final optimized versors corresponding to final fitted orbit
-            df_client_real: real (unperturbed) simulated r,v dataframe (in m, m/s) (lenght N)
-            df_client_init: initial guess r,v dataframe for initialize the LS algorithm (in m, m/s) (lenght N)
-            df_state_final: final r,v dataframe of the final fitted orbit (in m, m/s) (lenght N) 
+            df_client_groundTruth: groundTruth (unperturbed) simulated r,v dataframe (in m, m/s) (lenght N)
+            df_client_initialGuess: initial guess r,v dataframe for initialize the LS algorithm (in m, m/s) (lenght N)
+            df_state_groundSegment: final r,v dataframe of the final fitted orbit (in m, m/s) (lenght N) 
+            df_servicer: GroundTruth r,v dataframe for the servicer. (in m, m/s)
             b_matrix = matrix of temporal evolution of residuals vector (norm over x,y,z dimensions)
             n_loops: Number of iteration loops (optional)  
             rMax = Max radius / semi-major axis (for near circular orbit) for the plot-scale. Default r ~ r_GEO (in m)
         Outputs:
             plots
         """
-        self.versor_arr_real_unfilt = versor_arr_real
-        self.versor_arr_real = versor_arr_real_filt
+        self.versor_arr_groundTruth_unfilt = versor_arr_groundTruth_unfilt
+        self.versor_arr_groundTruth = versor_arr_groundTruth
         self.versor_arr_meas = versor_arr_meas
         self.versor_arr_comp = versor_arr_comp
-        self.df_client_ECI_unfilt = df_client_real_unfilt
-        self.df_client_ECI_m = df_client_real
-        self.df_client_ECI_fit = df_client_init
-        self.df_state_final = df_state_final
+        self.df_client_groundTruth_unfilt = df_client_groundTruth_unfilt
+        self.df_client_groundTruth = df_client_groundTruth
+        self.df_client_groundSegment = df_client_initialGuess
+        self.df_state_groundSegment = df_state_groundSegment
         self.n_loops = n_loops
         self.rMax = rMax
         self.df_servicer = df_servicer
         self.df_residuals_matrix = b_matrix
         self.save_dir = save_dir
+        if Block == True:           # prevent top assign meaningless values
+            self.Block = Block
+        else:
+            self.Block = False
 
     def plotResiduals(self):
 
@@ -49,26 +53,26 @@ class PLOTRESULTS:
         # ==============================================================================
 
         # 1. Calculate residuals (magnitude of the error relative to the truth)
-        res_meas = np.linalg.norm(self.versor_arr_real - self.versor_arr_meas, axis=1)
-        res_comp = np.linalg.norm(self.versor_arr_real - self.versor_arr_comp, axis=1) 
+        res_meas = np.rad2deg(np.asin(np.linalg.norm(self.versor_arr_groundTruth - self.versor_arr_meas, axis=1)))
+        res_comp = np.rad2deg(np.asin(np.linalg.norm(self.versor_arr_groundTruth - self.versor_arr_comp, axis=1))) 
 
         n_meas = len(self.versor_arr_meas)
         time_steps = range(n_meas)
 
         # First we rotate everything in ECEF frame (LVLH for GEO)
-        time_index = self.df_client_ECI_m.index
-        time_index2 = self.df_client_ECI_unfilt.index
+        time_index = self.df_client_groundTruth.index
+        time_index2 = self.df_client_groundTruth_unfilt.index
         cols = [f'randv_mks_{i}' for i in range(6)]         # 0 to 5 for compatibility with rotate_gps
 
         # initialyze empty array (we have to "fake" velocities)
-        zeri = np.zeros_like(self.versor_arr_real)
-        zeri2 = np.zeros_like(self.versor_arr_real_unfilt)
+        zeri = np.zeros_like(self.versor_arr_groundTruth)
+        zeri2 = np.zeros_like(self.versor_arr_groundTruth_unfilt)
 
-        # --- REAL VERSORS ---
-        versors_real_6d = np.hstack((self.versor_arr_real_unfilt, zeri2))
-        df_versors_real = pd.DataFrame(versors_real_6d, index=time_index2, columns=cols)
-        df_versors_real_rot = rot.rotate_gps(df_versors_real, method="I2E")
-        versors_real = df_versors_real_rot.iloc[:, 0:3].values             # only position estracted
+        # --- groundTruth VERSORS ---
+        versors_groundTruth_6d = np.hstack((self.versor_arr_groundTruth_unfilt, zeri2))
+        df_versors_groundTruth = pd.DataFrame(versors_groundTruth_6d, index=time_index2, columns=cols)
+        df_versors_groundTruth_rot = rot.rotate_gps(df_versors_groundTruth, method="I2E")
+        versors_groundTruth = df_versors_groundTruth_rot.iloc[:, 0:3].values             # only position estracted
 
         # --- MEASURED VERSORS ---
         versors_meas_6d = np.hstack((self.versor_arr_meas, zeri))
@@ -87,16 +91,16 @@ class PLOTRESULTS:
         gs = gridspec.GridSpec(2, 1, height_ratios=[1.5, 1])
         ax_xy = fig.add_subplot(gs[0])
 
-        # Real, unfiltered Trajectory
-        ax_xy.plot(versors_real[:, 0], versors_real[:, 1], label='Real Trajectory (Truth)', color='grey', linewidth=1)
-        ax_xy.plot(versors_real[0, 0], versors_real[0, 1], marker='*', color='grey', markersize=10) # Start point
+        # groundTruth, unfiltered Trajectory
+        ax_xy.plot(versors_groundTruth[:, 0], versors_groundTruth[:, 1], label='groundTruth versors', color='grey', linewidth=1)
+        ax_xy.plot(versors_groundTruth[0, 0], versors_groundTruth[0, 1], marker='*', color='grey', markersize=10) # Start point
 
         # Initial Guess / Measured
-        ax_xy.plot(versors_meas[:, 0], versors_meas[:, 1], label='Initial Guess (Measured)', color='red', alpha=0.5, linestyle='None', marker='.')
+        ax_xy.plot(versors_meas[:, 0], versors_meas[:, 1], label='Measured versors', color='red', alpha=0.5, linestyle='None', marker='.')
         ax_xy.plot(versors_meas[0, 0], versors_meas[0, 1], marker='*', color='red', markersize=10) # Start point
 
         # Final Computed
-        ax_xy.plot(versors_final[:, 0], versors_final[:, 1], label='Final Fitted Trajectory', color='blue', linestyle='None', linewidth=2, marker='.')
+        ax_xy.plot(versors_final[:, 0], versors_final[:, 1], label='Ground segment versors', color='blue', linestyle='None', linewidth=2, marker='.')
         ax_xy.plot(versors_final[0, 0], versors_final[0, 1], marker='*', color='blue', markersize=10) # Start point
 
         ax_xy.set_title('Relative Motion X-Y Plane - Versors in ECEF')
@@ -113,12 +117,12 @@ class PLOTRESULTS:
         # Spans across all 3 columns (gs[1, :])
         ax_res = fig.add_subplot(gs[1, :])
 
-        ax_res.plot(time_steps, res_meas, marker='o', linestyle='-', color='red', alpha=0.5, markersize=4, label='|Real - Measured| (Initial Noise)')
-        ax_res.plot(time_steps, res_comp, marker='s', linestyle='-', color='blue', alpha=0.8, markersize=4, label='|Real - Computed| (Final Fit Error)')
+        ax_res.plot(time_steps, res_meas, marker='o', linestyle='-', color='red', alpha=0.5, markersize=4, label='|groundTruth - Measured| (Initial Noise)')
+        ax_res.plot(time_steps, res_comp, marker='s', linestyle='-', color='blue', alpha=0.8, markersize=4, label='|groundTruth - groundSegment| (Final Fit Error)')
 
         ax_res.set_xlabel('Measurement Index')
-        ax_res.set_ylabel('Residual Magnitude')
-        ax_res.set_title('Versor Residuals Comparison: Initial Noise vs Final Fit')
+        ax_res.set_ylabel('Angular error [deg]')
+        ax_res.set_title('Total angular error on versors: Initial vs Final Fit (ground segment) errors (small angle approx)')
         ax_res.grid(True, linestyle='--', alpha=0.7)
         ax_res.legend()
 
@@ -126,7 +130,7 @@ class PLOTRESULTS:
         if self.save_dir:
             import os
             fig.savefig(os.path.join(self.save_dir, "residualsplot.png"), dpi=200)
-        plt.show(block=False) 
+        plt.show(block=self.Block) 
 
 
 
@@ -141,9 +145,9 @@ class PLOTRESULTS:
         
         # Calculate the 3D magnitude (Norm) of the error relative to the truth
         # Initial Measured Noise (Target to beat)
-        res_meas_magnitude = np.linalg.norm(self.versor_arr_real - self.versor_arr_meas, axis=1)
+        res_meas_magnitude = np.rad2deg(np.asin(np.linalg.norm(self.versor_arr_groundTruth - self.versor_arr_meas, axis=1)))
         # Final Computed Fit Error
-        res_comp_magnitude = np.linalg.norm(self.versor_arr_real - self.versor_arr_comp, axis=1) 
+        res_comp_magnitude = np.rad2deg(np.asin(np.linalg.norm(self.versor_arr_groundTruth - self.versor_arr_comp, axis=1)))
 
         n_measurements = len(self.versor_arr_meas)
         measurement_index = np.arange(n_measurements)
@@ -172,20 +176,23 @@ class PLOTRESULTS:
             for it in range(n_iter):
                 idx_start = it * 3
                 
-                # Extract X, Y, Z residuals for the current iteration using position (.iloc)
-                res_x = self.df_residuals_matrix.iloc[:, idx_start].values
-                res_y = self.df_residuals_matrix.iloc[:, idx_start + 1].values
-                res_z = self.df_residuals_matrix.iloc[:, idx_start + 2].values
+                # # Extract X, Y, Z residuals for the current iteration using position (.iloc)
+                # res_x = self.df_residuals_matrix.iloc[:, idx_start].values
+                # res_y = self.df_residuals_matrix.iloc[:, idx_start + 1].values
+                # res_z = self.df_residuals_matrix.iloc[:, idx_start + 2].values
+                res_xyz = self.df_residuals_matrix.iloc[:, idx_start : idx_start + 3].values
                 
                 # Calculate the 3D Magnitude (Norm) of the error for each measurement point
-                magnitude_res = np.sqrt(res_x**2 + res_y**2 + res_z**2)
+                # magnitude_res = np.sqrt(res_x**2 + res_y**2 + res_z**2)
+                # error_angles = np.rad2deg(np.asin(magnitude_res))
+                error_angles = np.rad2deg(np.asin(np.linalg.norm(res_xyz, axis=1)))
                 
                 # Get the color corresponding to this iteration
                 color = cmap(norm_colors(it))
                 
                 # Plot the curve for this specific iteration
                 # Note: We don't add labels here to keep the legend clean
-                ax.plot(measurement_index, magnitude_res, linestyle='-', 
+                ax.plot(measurement_index, error_angles, linestyle='-', 
                         color=color, alpha=0.8, linewidth=1.5)
             
             # --- Add Colorbar ---
@@ -206,14 +213,14 @@ class PLOTRESULTS:
 
         # Plot the INITIAL MEASURED NOISE once as a thin grey dashed line (The 'Target')
         ax.plot(measurement_index, res_meas_magnitude, color='grey', linestyle='--', 
-                linewidth=1, label='Initial Measured Noise (Target to Beat)')
+                linewidth=1, label='Initial Measured Error Angles')
 
         # ==============================================================================
         # --- 5. FORMATTING AND LEGEND (CUSTOM HANDLES)                              ---
         # ==============================================================================
         ax.set_xlabel('Measurement Index', fontsize=12)
-        ax.set_ylabel('Residual Magnitude (Norm 3D)', fontsize=12)
-        ax.set_title('Versor Residuals Evolution: Initial Noise vs Convergence History', fontsize=14)
+        ax.set_ylabel('Absolut Error Angles', fontsize=12)
+        ax.set_title('Versor Angular Eroror Evolution: Convergence history and original noise (small angles approx)', fontsize=14)
         ax.grid(True, linestyle='--', alpha=1)
         
         # 1. Get the existing handles and labels (the black dashed line)
@@ -227,7 +234,7 @@ class PLOTRESULTS:
 
             # Create Line2D objects for the legend
             line_start = plt.Line2D([0], [0], color=color_start, lw=2, label='Initial Guess (Iter 0)')
-            line_end = plt.Line2D([0], [0], color=color_end, lw=2, label=f'Final Fit (Iter {n_iter - 1})')
+            line_end = plt.Line2D([0], [0], color=color_end, lw=2, label=f'Final Fit - Ground truth (Iter {n_iter - 1})')
 
             # 3. Add them to the existing legend handles
             handles.extend([line_start, line_end])
@@ -241,8 +248,8 @@ class PLOTRESULTS:
         plt.tight_layout()
         if self.save_dir:
             import os
-            fig.savefig(os.path.join(self.save_dir, "residuals_history.png"), dpi=200)
-        plt.show(block=False)
+            fig.savefig(os.path.join(self.save_dir, "errorAngles_history.png"), dpi=200)
+        plt.show(block=self.Block)
 
        
     def compute_errors(self, df_a, df_b):
@@ -266,37 +273,37 @@ class PLOTRESULTS:
         lim_min = -4e7
         lim_max = self.rMax * 1.1
     
-        # 3D plot of original client orbit self.df_client_ECI_m and the perturbated initial guess self.df_client_ECI_fit:
+        # 3D plot of original client orbit self.df_client_groundTruth and the perturbated initial guess self.df_client_groundSegment:
 
         fig = plt.figure(figsize=(12, 10))
         ax = fig.add_subplot(111, projection='3d')
 
         # Plot original unfiltered client orbit
-        ax.scatter(self.df_client_ECI_unfilt["randv_mks_0"],
-                self.df_client_ECI_unfilt["randv_mks_1"],
-                self.df_client_ECI_unfilt["randv_mks_2"],
-                label="Unfiltered Orbit", color="grey", s=0.5, linestyle=':')
+        ax.scatter(self.df_client_groundTruth_unfilt["randv_mks_0"],
+                self.df_client_groundTruth_unfilt["randv_mks_1"],
+                self.df_client_groundTruth_unfilt["randv_mks_2"],
+                color="grey", s=0.5, linestyle=':')
 
         # Plot original client orbit
-        ax.scatter(self.df_client_ECI_m["randv_mks_0"],
-                self.df_client_ECI_m["randv_mks_1"],
-                self.df_client_ECI_m["randv_mks_2"],
-                label="Original Client Orbit", color="red", s=5)
+        ax.scatter(self.df_client_groundTruth["randv_mks_0"],
+                self.df_client_groundTruth["randv_mks_1"],
+                self.df_client_groundTruth["randv_mks_2"],
+                label="Ground Truth Client Orbit", color="red", s=5)
 
         # Plot final fitted orbit
-        ax.scatter(self.df_client_ECI_fit["randv_mks_0"],
-                self.df_client_ECI_fit["randv_mks_1"],
-                self.df_client_ECI_fit["randv_mks_2"],
-                label="Initial guess Orbit", color="green", s=5)
+        ax.scatter(self.df_client_groundSegment["randv_mks_0"],
+                self.df_client_groundSegment["randv_mks_1"],
+                self.df_client_groundSegment["randv_mks_2"],
+                label="InitialGuess-propagated Orbit", color="green", s=5)
         
                 # Plot sun direction
-        t_start = Time(self.df_client_ECI_m.index[0])
+        t_start = Time(self.df_client_groundTruth.index[0])
         sun_coor = get_sun(t_start)
         sun_pos = sun_coor.cartesian.xyz.to('m').value
         sun_vec = sun_pos / np.linalg.norm(sun_pos)
         light_direction = -sun_vec * lim_max * 0.5
         # Target position to plot incoming light
-        target_pos = np.mean(self.df_client_ECI_m.iloc[:, :3].values, axis=0)
+        target_pos = np.mean(self.df_client_groundTruth.iloc[:, :3].values, axis=0)
         start_point = target_pos + (sun_vec * lim_max * 0.5)
 
         # Plot Quiver
@@ -311,7 +318,7 @@ class PLOTRESULTS:
         ax.set_xlabel("X (m)")
         ax.set_ylabel("Y (m)")
         ax.set_zlabel("Z (m)")
-        ax.set_title("Original vs Initial guess Orbit")
+        ax.set_title("Ground Truth vs InitialGuess-propagated Orbit")
         ax.legend()
 
         ax.set_xlim([lim_min, lim_max])
@@ -322,34 +329,34 @@ class PLOTRESULTS:
             import os
             fig.savefig(os.path.join(self.save_dir, "Original_VS_Initial.png"), dpi=200)
 
-        # 3D plot of original client orbit self.df_client_ECI_m and the final, fitted self.df_state_final:
+        # 3D plot of original client orbit self.df_client_groundTruth and the final, fitted self.df_state_groundSegment:
 
         fig = plt.figure(figsize=(12, 10))
         ax = fig.add_subplot(111, projection='3d')
 
         # Plot original unfiltered client orbit
-        ax.scatter(self.df_client_ECI_unfilt["randv_mks_0"],
-                self.df_client_ECI_unfilt["randv_mks_1"],
-                self.df_client_ECI_unfilt["randv_mks_2"],
-                label="Unfiltered Orbit", color="grey", s=0.5, linestyle=':')
+        ax.scatter(self.df_client_groundTruth_unfilt["randv_mks_0"],
+                self.df_client_groundTruth_unfilt["randv_mks_1"],
+                self.df_client_groundTruth_unfilt["randv_mks_2"],
+                color="grey", s=0.5, linestyle=':')
 
         # Plot original client orbit
-        ax.scatter(self.df_client_ECI_m["randv_mks_0"],
-                self.df_client_ECI_m["randv_mks_1"],
-                self.df_client_ECI_m["randv_mks_2"],
-                label="Original Client Orbit", color="red", s=5)
+        ax.scatter(self.df_client_groundTruth["randv_mks_0"],
+                self.df_client_groundTruth["randv_mks_1"],
+                self.df_client_groundTruth["randv_mks_2"],
+                label="Ground Truth Orbit", color="red", s=5)
 
         # Plot final fitted orbit
-        ax.scatter(self.df_state_final["randv_mks_0"],
-                self.df_state_final["randv_mks_1"],
-                self.df_state_final["randv_mks_2"],
-                label="Final Fitted Orbit", color="green", s=5)
+        ax.scatter(self.df_state_groundSegment["randv_mks_0"],
+                self.df_state_groundSegment["randv_mks_1"],
+                self.df_state_groundSegment["randv_mks_2"],
+                label="Ground Segment Orbit", color="green", s=5)
         
         # Plot Servicer Orbit
         ax.plot(self.df_servicer["randv_mks_0"],
                 self.df_servicer["randv_mks_1"],
                 self.df_servicer["randv_mks_2"],
-                label="Servicer Orbit (Observer)", 
+                label="Servicer grount truth Orbit", 
                 color="blue", linestyle='--', linewidth=1, alpha=0.7) 
 
         # single point for the current/starting position of the servicer
@@ -359,13 +366,13 @@ class PLOTRESULTS:
                    color="blue", s=5, marker='o')
         
         # Plot sun direction
-        t_start = Time(self.df_client_ECI_m.index[0])
+        t_start = Time(self.df_client_groundTruth.index[0])
         sun_coor = get_sun(t_start)
         sun_pos = sun_coor.cartesian.xyz.to('m').value
         sun_vec = sun_pos / np.linalg.norm(sun_pos)
         light_direction = -sun_vec * lim_max * 0.5
         # Target position to plot incoming light
-        target_pos = np.mean(self.df_client_ECI_m.iloc[:, :3].values, axis=0)
+        target_pos = np.mean(self.df_client_groundTruth.iloc[:, :3].values, axis=0)
         start_point = target_pos + (sun_vec * lim_max * 0.5)
 
         # Plot Quiver
@@ -381,7 +388,7 @@ class PLOTRESULTS:
         ax.set_xlabel("X (m)")
         ax.set_ylabel("Y (m)")
         ax.set_zlabel("Z (m)")
-        ax.set_title("Original vs Final Fitted Orbit")
+        ax.set_title("Ground Truth vs Segment Orbit (ECI)")
         ax.legend()
 
 
@@ -390,14 +397,14 @@ class PLOTRESULTS:
         ax.set_zlim([lim_min, lim_max])
         ax.set_box_aspect([1, 1, 1])
         if self.save_dir:
-            fig.savefig(os.path.join(self.save_dir, "Original_VS_Final.png"), dpi=200)
+            fig.savefig(os.path.join(self.save_dir, "truth_VS_segment.png"), dpi=200)
 
 
         # compute and plot: 1) difference between original and initial guessed orbit\\ 2) difference between original and final fitted orbit\\ 3) difference between initial guess and final fitted orbit
 
-        df_true = self.df_client_ECI_m
-        df_initial = self.df_client_ECI_fit
-        df_final = self.df_state_final
+        df_true = self.df_client_groundTruth
+        df_initial = self.df_client_groundSegment
+        df_final = self.df_state_groundSegment
 
         # 1) Original vs Initial Guess
         err_pos_orig_init, err_vel_orig_init = self.compute_errors(df_true, df_initial)
@@ -412,20 +419,18 @@ class PLOTRESULTS:
         fig, ax = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
 
         # Sottoplot 1: Posizione
-        ax[0].plot(df_true.index, err_pos_orig_init, label='Original vs Initial Guess', color='red')
-        ax[0].plot(df_true.index, err_pos_init_final, label='Initial Guess vs Final Fit', color='orange', linestyle=':')
-        ax[0].plot(df_true.index, err_pos_orig_final, label='Original vs Final Fit (Residual)', color='green', linewidth=2, linestyle='--')
+        ax[0].plot(df_true.index, err_pos_orig_init, label='Ground truth vs InitialGuess-propagated', color='red')
+        ax[0].plot(df_true.index, err_pos_orig_final, label='Ground truth vs Ground Segment (Final error)', color='green', linewidth=2, linestyle='--')
 
         ax[0].set_ylabel('Position Error [m]')
-        ax[0].set_title('Comparison of Orbital Position Differences')
+        ax[0].set_title('Comparison of Orbital Position Differences (ECI)')
         ax[0].legend()
         ax[0].grid(True, which='both', linestyle='--', alpha=0.5)
         ax[0].set_yscale('log') # Usiamo scala logaritmica per vedere il miglioramento
 
         # Sottoplot 2: Velocità
-        ax[1].plot(df_true.index, err_vel_orig_init, label='Original vs Initial Guess', color='red')
-        ax[1].plot(df_true.index, err_vel_init_final, label='Initial Guess vs Final Fit', color='orange', linestyle=':')
-        ax[1].plot(df_true.index, err_vel_orig_final, label='Original vs Final Fit (Residual)', color='green', linewidth=2, linestyle='--')
+        ax[1].plot(df_true.index, err_vel_orig_init, label='Ground truth vs InitialGuess-propagated', color='red')
+        ax[1].plot(df_true.index, err_vel_orig_final, label='Ground truth vs Ground Segment (Final error)', color='green', linewidth=2, linestyle='--')
 
         ax[1].set_ylabel('Velocity Error [m/s]')
         ax[1].set_xlabel('Time')
@@ -448,7 +453,7 @@ class PLOTRESULTS:
         print("norm of error between original and final guess:")
         print(np.linalg.norm(err_pos_orig_final))
         print()
-        print("Max error between final and real positions:")
+        print("Max error between final and groundTruth positions:")
         print(np.max(err_pos_orig_final))
         print()
         if self.n_loops!= 0:
@@ -463,11 +468,11 @@ class PLOTRESULTS:
             f.write(str(np.linalg.norm(err_pos_orig_init)) + "\n")
             f.write("\nnorm of error between original and final guess:\n")
             f.write(str(np.linalg.norm(err_pos_orig_final)) + "\n")
-            f.write("\nMax error between final and real positions:\n")
+            f.write("\nMax error between final and groundTruth positions:\n")
             f.write(str(np.max(err_pos_orig_final)) + "\n")
-        plt.show(block=False)
+        plt.show(block=self.Block)
 
-def plot_detectability(phi, d, m_v, m_v_threshold, save_dir=None):
+def plot_detectability(phi, d, m_v, m_v_threshold, save_dir=None, Block = False):
     """
     Plots the evolution of Phase Angle, Distance, and Magnitude.
     Input:
@@ -511,4 +516,4 @@ def plot_detectability(phi, d, m_v, m_v_threshold, save_dir=None):
     if save_dir:
         import os
         fig.savefig(os.path.join(save_dir, "sunFilter.png"), dpi=200)
-    plt.show(block=False)
+    plt.show(block=Block)
