@@ -2,3 +2,4 @@
 *.pyc
 /BATCH_MIO/Tests
 /tests
+/orbitfit/tests
