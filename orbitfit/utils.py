@@ -54,6 +54,9 @@ def rv2oe(r, v, threshold=1e-7):
             sigma0 = np.dot(r, v) / np.sqrt(mu_earth)
             E0 = np.arctan2(sigma0 / np.sqrt(a), 1 - rnorm / a)
             mo = E0 - ecco * np.sin(E0)
+        else:
+            sigma0 = np.dot(r, v) / np.sqrt(mu_earth)
+            mo = np.arctan2(sigma0 / np.sqrt(a), 1 - rnorm / a)
     return a, ecco, inclo, nodeo, argpo, mo
 
 def oe2rv(a, ecco, inclo, nodeo, argpo, mo):
